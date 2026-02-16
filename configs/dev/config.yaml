@@ -1,0 +1,17 @@
+app:
+  env: development
+  log_level: info
+
+# database:
+#   host:
+#   port:
+#   database:
+#   user:
+#   password:
+
+llm:
+  base_url: https://openrouter.ai/api/v1
+  model: arcee-ai/trinity-large-preview:free
+  temperature: 0.7
+  max_tokens: 2048
+  timeout: 30s

@@ -9,12 +9,13 @@
 
 
 *.env
-configs/dev/
+# configs/dev/
 
 
 .vscode/
 .idea/
 *.iml
+.sum
 
 
 .DS_Store
