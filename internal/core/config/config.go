@@ -103,3 +103,5 @@ func Load(configPath string) (*Config, error) {
 
 //this func will get called in load config or main.go will decide latter and viper
 //will call the yaml file config.Load("config.yaml") make to struct file cfg
+
+
