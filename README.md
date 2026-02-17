@@ -6,6 +6,13 @@ This project is a DevSecOps AI Agent designed with a **Hexagonal Architecture** 
 
 ---
 
+## 🚧 Current Development Status
+
+- **Active Work**: Currently building the core agent logic in `internal/agent/agent.go`.
+- **Recent Updates**: Added RAG configuration placeholders (see `PROJECT_CONTEXT.md`) and initial unit tests for registry and memory.
+
+---
+
 ## 🏗️ Architecture
 
 The project follows a modular architecture where the core logic is isolated from external dependencies (tools, interfaces).

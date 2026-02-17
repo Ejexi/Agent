@@ -14,6 +14,19 @@
 - **AI Client**: [`openai-go`](github.com/openai/openai-go/v2) - Interaction with LLMs.
 - **Test Framework**: Native Go testing + `testify` (implied by typical Go stacks, though simple `testing` is core).
 
+<!--
+## RAG Configuration (Planned)
+
+rag:
+  enabled: true
+  chunk_size: 1000
+  chunk_overlap: 200
+  embedding_model: "text-embedding-3-small"
+  vector_db:
+    type: "postgres"
+    connection_string: "${POSTGRES_CONN_STRING}"
+-->
+
 ## 3. Architecture Overview
 
 The system follows **Hexagonal Architecture** to ensure maintainability and testability.
