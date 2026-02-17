@@ -12,6 +12,7 @@ type Config struct {
 	App AppConfig
 	// Database DatabaseConfig
 	LLM LLMConfig
+	// RAG RAGConfig
 }
 
 // AppConfig holds application-level settings
@@ -20,6 +21,7 @@ type AppConfig struct {
 	LogLevel string `mapstructure:"log_level"`
 }
 
+//----------------------------------------
 // DatabaseConfig holds database connection settings
 // type DatabaseConfig struct {
 // 	Host     string
@@ -28,6 +30,7 @@ type AppConfig struct {
 // 	User     string
 // 	Password string
 // }
+//----------------------------------------
 
 // llm config
 type LLMConfig struct {
@@ -38,6 +41,26 @@ type LLMConfig struct {
 	MaxTokens   int `mapstructure:"max_tokens"`
 	Timeout     time.Duration
 }
+
+//----------------------------------------
+//  RAG structs
+// type RAGConfig struct {
+// 	Enabled             bool
+// 	DocumentsPath       string  `mapstructure:"documents_path"`
+// 	ChunkSize           int     `mapstructure:"chunk_size"`
+// 	ChunkOverlap        int     `mapstructure:"chunk_overlap"`
+// 	TopK                int     `mapstructure:"top_k"`
+// 	SimilarityThreshold float64 `mapstructure:"similarity_threshold"`
+// 	VectorDB            VectorDBConfig
+// }
+
+// type VectorDBConfig struct {
+// 	Type       string
+// 	Host       string
+// 	Port       int
+// 	Collection string
+// }
+//---------------------------------------
 
 // Take config from yaml file
 func Load(configPath string) (*Config, error) {
@@ -50,6 +73,13 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("app.env", "development")
 	viper.SetDefault("app.log_level", "info")
 	viper.SetDefault("llm.timeout", "30s")
+
+	// // RAG
+	// viper.SetDefault("rag.enabled", false)
+	// viper.SetDefault("rag.chunk_size", 500)
+	// viper.SetDefault("rag.chunk_overlap", 50)
+	// viper.SetDefault("rag.top_k", 3)
+	// viper.SetDefault("rag.similarity_threshold", 0.7)
 
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {

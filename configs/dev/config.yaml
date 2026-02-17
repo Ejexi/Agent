@@ -15,3 +15,16 @@ llm:
   temperature: 0.7
   max_tokens: 2048
   timeout: 30s
+
+# rag:
+#   enabled: true                        # Turn RAG on/off
+#   documents_path: ./documents          # Where docs are stored
+#   chunk_size: 500                      # Characters per chunk
+#   chunk_overlap: 50                    # Overlap between chunks
+#   top_k: 3                            # Return top 3 relevant chunks
+#   similarity_threshold: 0.7            # Minimum similarity score
+#   vectordb:
+#     type: chromadb                     # Vector DB type
+#     host: localhost                    # ChromaDB host
+#     port: 8000                         # ChromaDB port
+#     collection: agent_knowledge        # Collection name
