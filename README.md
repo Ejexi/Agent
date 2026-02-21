@@ -127,3 +127,15 @@ The project relies on these key libraries. Add new ones here if you introduce ma
     ```bash
     go run cmd/agent/main.go
     ```
+
+//(Generic Layer)
+Two-layer abstraction agent deal with layer one
+map[string]interface{}
+inner layer inside every tool everyting is typed
+leyer two inner tool struct typed
+
+internal/agent/core/
+├── agent.go # Agent struct + New() + ProcessRequest()
+├── llm.go # LLM communication (buildMessages, callLLM, buildSystemPrompt)
+├── tools.go # Tool execution (executeTool, parseToolCommand)
+└── utils.go # Helper methods (ClearMemory, GetMemoryCount, ListTools)
