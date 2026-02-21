@@ -1,0 +1,21 @@
+env: "development"
+
+# LLM Providers Configuration
+# We leave api_key blank or omit it so it is injected securely via Environment Variables by the OS.
+# Viper automatically overrides these based on the prefix 'AGENT_' and mapping '.' to '_'
+# Example:
+# Windows: $env:AGENT_LLM_OPENROUTER_API_KEY="sk-or-v1-..."
+# Linux/Mac: export AGENT_LLM_OPENROUTER_API_KEY="sk-or-v1-..."
+
+llm:
+  openai:
+    api_key: ""
+    model: "gpt-4"
+
+  gemini:
+    api_key: ""
+    model: "gemini-1.5-pro"
+
+  openrouter:
+    api_key: ""
+    model: "google/gemini-2.5-flash"
