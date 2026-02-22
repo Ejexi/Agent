@@ -81,7 +81,9 @@ func (t *ScanTool) Run(ctx context.Context, task domain.Task) (domain.Result, er
 
 		provider := t.llmRegistry.Get(providerName)
 		if provider != nil {
-			report, err := provider.Generate(ctx, "Analyze this scan target: "+target)
+			report, err := provider.Generate(ctx, []ports.Message{
+				{Role: ports.RoleUser, Content: "Analyze this scan target: " + target},
+			}, nil)
 			if err == nil {
 				llmReport = report
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"duckops/internal/ports"
 	"duckops/internal/types"
+	"net/http"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -25,6 +26,13 @@ func NewOpenAICompatibleAdapter(name, apiKey, model, baseURL string) ports.LLM {
 		config.BaseURL = baseURL
 	}
 
+	// Add generic caching headers
+	config.HTTPClient = &http.Client{
+		Transport: newHeaderTransport(map[string]string{
+			"anthropic-beta": "prompt-caching-2024-07-31",
+		}, nil),
+	}
+
 	// 2. Return the adapter which satisfies ports.LLM
 	return &OpenAICompatibleAdapter{
 		providerName: name,
@@ -39,22 +47,34 @@ func (a *OpenAICompatibleAdapter) Name() string {
 }
 
 // Generate implements the ports.LLM interface.
-// While the interface currently supports a single prompt string,
-// the adapter is built using the ChatCompletion API to support modern models.
-func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, prompt string) (string, error) {
-	// Example of supporting system prompts by prepending if needed,
-	// though here we follow the standard user message pattern.
+func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, messages []ports.Message, opts *ports.GenerateOptions) (string, error) {
+	reqMessages := make([]openai.ChatCompletionMessage, len(messages))
+	for i, m := range messages {
+		reqMessages[i] = openai.ChatCompletionMessage{
+			Role:    string(m.Role),
+			Content: m.Content,
+		}
+	}
+
+	model := a.model
+	if opts != nil && opts.Model != "" {
+		model = opts.Model
+	}
+
 	req := openai.ChatCompletionRequest{
-		Model: a.model,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: prompt,
-			},
-		},
-		// You can add more production-grade defaults here
+		Model:       model,
+		Messages:    reqMessages,
 		MaxTokens:   4096,
 		Temperature: 0.7,
+	}
+
+	if opts != nil {
+		if opts.MaxTokens > 0 {
+			req.MaxTokens = opts.MaxTokens
+		}
+		if opts.Temperature > 0 {
+			req.Temperature = opts.Temperature
+		}
 	}
 
 	resp, err := a.client.CreateChatCompletion(ctx, req)
@@ -69,22 +89,69 @@ func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, prompt string) (
 	return resp.Choices[0].Message.Content, nil
 }
 
-// GenerateChat is an extended method (not currently in ports.LLM) that demonstrates
-// how this adapter handles full chat history (System, User, Assistant).
-func (a *OpenAICompatibleAdapter) GenerateChat(ctx context.Context, messages []openai.ChatCompletionMessage) (string, error) {
+// Stream implements the ports.LLM interface.
+func (a *OpenAICompatibleAdapter) Stream(ctx context.Context, messages []ports.Message, opts *ports.GenerateOptions) (<-chan ports.ChatChunk, error) {
+	ch := make(chan ports.ChatChunk)
+
+	reqMessages := make([]openai.ChatCompletionMessage, len(messages))
+	for i, m := range messages {
+		reqMessages[i] = openai.ChatCompletionMessage{
+			Role:    string(m.Role),
+			Content: m.Content,
+		}
+	}
+
+	model := a.model
+	if opts != nil && opts.Model != "" {
+		model = opts.Model
+	}
+
 	req := openai.ChatCompletionRequest{
-		Model:    a.model,
-		Messages: messages,
+		Model:    model,
+		Messages: reqMessages,
+		Stream:   true,
 	}
 
-	resp, err := a.client.CreateChatCompletion(ctx, req)
+	if opts != nil {
+		if opts.MaxTokens > 0 {
+			req.MaxTokens = opts.MaxTokens
+		}
+	}
+
+	stream, err := a.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
-		return "", types.Wrapf(err, types.ErrCodeToolExecution, "%s chat error", a.Name())
+		return nil, types.Wrapf(err, types.ErrCodeToolExecution, "%s streaming error", a.Name())
 	}
 
-	if len(resp.Choices) == 0 {
-		return "", types.Newf(types.ErrCodeToolExecution, "received empty response from %s", a.Name())
-	}
+	go func() {
+		defer close(ch)
+		defer stream.Close()
 
-	return resp.Choices[0].Message.Content, nil
+		for {
+			response, err := stream.Recv()
+			if err != nil {
+				if err.Error() == "EOF" {
+					return
+				}
+				ch <- ports.ChatChunk{Error: err}
+				return
+			}
+
+			if len(response.Choices) > 0 {
+				content := response.Choices[0].Delta.Content
+				if content != "" {
+					ch <- ports.ChatChunk{Content: content}
+				}
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
+// HealthCheck verifies connectivity to the provider.
+func (a *OpenAICompatibleAdapter) HealthCheck(ctx context.Context) error {
+	// Simple check by listing models or just a ping if supported
+	_, err := a.client.GetModel(ctx, a.model)
+	return err
 }

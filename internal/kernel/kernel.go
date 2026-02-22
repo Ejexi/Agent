@@ -66,3 +66,11 @@ func (k *Kernel) Execute(ctx context.Context, task domain.Task) (domain.Result, 
 	}
 	return k.runtime.Execute(ctx, task)
 }
+
+// ExecuteBatch provides a way to execute multiple tools in parallel.
+func (k *Kernel) ExecuteBatch(ctx context.Context, tasks []domain.Task) ([]domain.Result, error) {
+	if k.runtime == nil {
+		return nil, types.New(types.ErrCodeInternal, "runtime is not configured")
+	}
+	return k.runtime.ExecuteBatch(ctx, tasks)
+}

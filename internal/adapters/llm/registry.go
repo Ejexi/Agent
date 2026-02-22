@@ -61,6 +61,22 @@ func (r *RegistryAdapter) List() []string {
 	return names
 }
 
+// MustGet returns the registered LLM provider or panics if not found.
+func (r *RegistryAdapter) MustGet(name string) ports.LLM {
+	llm := r.Get(name)
+	if llm == nil {
+		panic("LLM provider not found: " + name)
+	}
+	return llm
+}
+
+// Default returns the default LLM provider.
+func (r *RegistryAdapter) Default() ports.LLM {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.llms[r.defaultProvider]
+}
+
 // RegisterFromConfig iterates through the provided configuration and registers all LLMs.
 // It uses the OpenAICompatibleAdapter for any provider that has a BaseURL,
 // and specialized adapters for known providers.

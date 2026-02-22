@@ -4,6 +4,7 @@ import (
 	"context"
 	"duckops/internal/domain"
 	types "duckops/internal/types"
+	"sync"
 )
 
 // Runtime handles the execution of tools.
@@ -50,4 +51,36 @@ func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result,
 	result.TaskID = task.ID
 
 	return result, nil
+}
+
+// ExecuteBatch runs multiple tools in parallel.
+func (r *Runtime) ExecuteBatch(ctx context.Context, tasks []domain.Task) ([]domain.Result, error) {
+	if r.registry == nil {
+		return nil, types.New(types.ErrCodeInternal, "runtime registry is not initialized")
+	}
+
+	results := make([]domain.Result, len(tasks))
+	errors := make([]error, len(tasks))
+	var wg sync.WaitGroup
+
+	for i, task := range tasks {
+		wg.Add(1)
+		go func(idx int, t domain.Task) {
+			defer wg.Done()
+			res, err := r.Execute(ctx, t)
+			results[idx] = res
+			errors[idx] = err
+		}(i, task)
+	}
+
+	wg.Wait()
+
+	// Return the first error encountered, if any (or we could wrap all of them)
+	for _, err := range errors {
+		if err != nil {
+			return results, err
+		}
+	}
+
+	return results, nil
 }

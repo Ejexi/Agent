@@ -71,7 +71,9 @@ func (t *ChatTool) Execute(ctx context.Context, params ChatParams) (domain.Resul
 		}, types.Newf(types.ErrCodeNotFound, "LLM provider '%s' not found", params.AIProvider)
 	}
 
-	response, err := llm.Generate(ctx, params.Prompt)
+	response, err := llm.Generate(ctx, []ports.Message{
+		{Role: ports.RoleUser, Content: params.Prompt},
+	}, nil)
 	if err != nil {
 		return domain.Result{
 			Success: false,

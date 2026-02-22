@@ -1,10 +1,12 @@
 package llm
 
 import (
-	types "duckops/internal/types"
 	"context"
+	"duckops/internal/ports"
+	types "duckops/internal/types"
 
 	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
 
@@ -37,10 +39,38 @@ func (g *GeminiAdapter) Name() string {
 }
 
 // Generate uses the persistent client, eliminating setup/teardown latency.
-func (g *GeminiAdapter) Generate(ctx context.Context, prompt string) (string, error) {
-	model := g.client.GenerativeModel(g.model)
+func (g *GeminiAdapter) Generate(ctx context.Context, messages []ports.Message, opts *ports.GenerateOptions) (string, error) {
+	if len(messages) == 0 {
+		return "", nil
+	}
 
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	modelName := g.model
+	if opts != nil && opts.Model != "" {
+		modelName = opts.Model
+	}
+
+	model := g.client.GenerativeModel(modelName)
+	cs := model.StartChat()
+
+	// Map history (all but last message)
+	if len(messages) > 1 {
+		history := messages[:len(messages)-1]
+		genaiHistory := make([]*genai.Content, len(history))
+		for i, msg := range history {
+			role := "user"
+			if msg.Role == ports.RoleAssistant {
+				role = "model"
+			}
+			genaiHistory[i] = &genai.Content{
+				Role:  role,
+				Parts: []genai.Part{genai.Text(msg.Content)},
+			}
+		}
+		cs.History = genaiHistory
+	}
+
+	lastMsg := messages[len(messages)-1]
+	resp, err := cs.SendMessage(ctx, genai.Text(lastMsg.Content))
 	if err != nil {
 		return "", types.Wrap(err, types.ErrCodeToolExecution, "failed to generate from gemini API")
 	}
@@ -49,12 +79,85 @@ func (g *GeminiAdapter) Generate(ctx context.Context, prompt string) (string, er
 		return "", types.New(types.ErrCodeToolExecution, "empty response generated from gemini")
 	}
 
-	part := resp.Candidates[0].Content.Parts[0]
-	if text, ok := part.(genai.Text); ok {
-		return string(text), nil
+	fullText := ""
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if text, ok := part.(genai.Text); ok {
+			fullText += string(text)
+		}
 	}
 
-	return "", types.New(types.ErrCodeToolExecution, "unexpected gemini data type returned")
+	return fullText, nil
+}
+
+// Stream implements the LLM Port with streaming support
+func (g *GeminiAdapter) Stream(ctx context.Context, messages []ports.Message, opts *ports.GenerateOptions) (<-chan ports.ChatChunk, error) {
+	if len(messages) == 0 {
+		return nil, types.New(types.ErrCodeInvalidInput, "no messages provided for streaming")
+	}
+
+	modelName := g.model
+	if opts != nil && opts.Model != "" {
+		modelName = opts.Model
+	}
+
+	ch := make(chan ports.ChatChunk)
+	model := g.client.GenerativeModel(modelName)
+	cs := model.StartChat()
+
+	// Map history
+	if len(messages) > 1 {
+		history := messages[:len(messages)-1]
+		genaiHistory := make([]*genai.Content, len(history))
+		for i, msg := range history {
+			role := "user"
+			if msg.Role == ports.RoleAssistant {
+				role = "model"
+			}
+			genaiHistory[i] = &genai.Content{
+				Role:  role,
+				Parts: []genai.Part{genai.Text(msg.Content)},
+			}
+		}
+		cs.History = genaiHistory
+	}
+
+	lastMsg := messages[len(messages)-1]
+	iter := cs.SendMessageStream(ctx, genai.Text(lastMsg.Content))
+
+	go func() {
+		defer close(ch)
+		for {
+			resp, err := iter.Next()
+			if err == iterator.Done {
+				return
+			}
+			if err != nil {
+				ch <- ports.ChatChunk{Error: err}
+				return
+			}
+
+			if len(resp.Candidates) > 0 {
+				for _, part := range resp.Candidates[0].Content.Parts {
+					if text, ok := part.(genai.Text); ok {
+						ch <- ports.ChatChunk{Content: string(text)}
+					}
+				}
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
+// HealthCheck verifies connectivity to Gemini.
+func (g *GeminiAdapter) HealthCheck(ctx context.Context) error {
+	// Simple check by listing models
+	iter := g.client.ListModels(ctx)
+	_, err := iter.Next()
+	if err == iterator.Done {
+		return nil
+	}
+	return err
 }
 
 // Close is specific to gemini adapter to clean up network connections on shutdown.
