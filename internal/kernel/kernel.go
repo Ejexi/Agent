@@ -1,10 +1,11 @@
 package kernel
 
 import (
+	"context"
 	"duckops/internal/domain"
 	"duckops/internal/ports"
+	"duckops/internal/tools/base"
 	types "duckops/internal/types"
-	"context"
 )
 
 // Dependencies holds all external ports needed by the kernel.
@@ -41,7 +42,7 @@ func New(deps Dependencies) *Kernel {
 }
 
 // RegisterTool adds a new tool to the kernel's registry.
-func (k *Kernel) RegisterTool(tool domain.Tool) error {
+func (k *Kernel) RegisterTool(tool base.Tool) error {
 	if k.registry == nil {
 		return types.New(types.ErrCodeInternal, "registry is not configured")
 	}

@@ -1,9 +1,13 @@
 package kernel
 
 import (
+	"bufio"
 	"duckops/internal/config"
 	"duckops/internal/ports"
 	"duckops/internal/types"
+	"fmt"
+	"os"
+	"strings"
 )
 
 // SetupService handles the first-run configuration logic for the Agent.
@@ -44,4 +48,34 @@ func (s *SetupService) GetProvider(providers []string) (string, error) {
 	}
 
 	return selectedProvider, nil
+}
+
+// ConfigureCustomProvider handles the interactive addition of a new provider.
+func (s *SetupService) ConfigureCustomProvider(appConfig *config.Config) error {
+	fmt.Print("\nWould you like to add a new custom LLM provider? (y/n): ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if answer != "y" && answer != "yes" {
+			return nil
+		}
+	}
+
+	name, llmCfg, err := s.prompter.PromptCustomProvider()
+	if err != nil {
+		return err
+	}
+
+	if appConfig.LLMs == nil {
+		appConfig.LLMs = make(map[string]config.LLMConfig)
+	}
+	appConfig.LLMs[name] = llmCfg
+
+	// Save to config.yaml (via config pkg)
+	if err := config.SaveConfig("config.yaml", appConfig); err != nil {
+		return types.Wrap(err, types.ErrCodeInternal, "failed to save to config.yaml")
+	}
+
+	fmt.Printf("\nSuccessfully added provider '%s' to config.yaml!\n", name)
+	return nil
 }

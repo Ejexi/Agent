@@ -1,9 +1,9 @@
 package kernel
 
 import (
+	"context"
 	"duckops/internal/domain"
 	types "duckops/internal/types"
-	"context"
 )
 
 // Runtime handles the execution of tools.
@@ -40,11 +40,14 @@ func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result,
 	}
 
 	// Runtime executes the tool (only the runtime should execute this)
-	result, err := tool.Run(ctx, task)
+	result, err := tool.ExecuteRaw(ctx, task.Args)
 	if err != nil {
 		appErr := types.Wrapf(err, types.ErrCodeToolExecution, "failed to execute tool %s", task.Tool)
 		return result, appErr
 	}
+
+	// Ensure the result has the correct TaskID
+	result.TaskID = task.ID
 
 	return result, nil
 }

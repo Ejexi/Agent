@@ -1,8 +1,9 @@
 package cli
 
 import (
-	"duckops/internal/types"
 	"bufio"
+	"duckops/internal/config"
+	"duckops/internal/types"
 	"fmt"
 	"os"
 	"strconv"
@@ -53,4 +54,58 @@ func (p *SetupPrompter) SelectProvider(providers []string) (string, error) {
 	}
 
 	return defaultProvider, nil
+}
+
+func (p *SetupPrompter) PromptCustomProvider() (name string, cfg config.LLMConfig, err error) {
+	scanner := bufio.NewScanner(os.Stdin)
+
+	fmt.Printf("\n--- Add New Custom LLM Provider ---\n")
+
+	for name == "" {
+		fmt.Print("Provider Name (e.g., groq, ollama): ")
+		if !scanner.Scan() {
+			return "", cfg, types.New(types.ErrCodeInternal, "failed to read name")
+		}
+		name = strings.TrimSpace(scanner.Text())
+		if name == "" {
+			fmt.Println("Error: Provider name cannot be empty.")
+		}
+	}
+
+	for cfg.APIKey == "" {
+		fmt.Print("API Key (or env var like ${GROQ_API_KEY}): ")
+		if !scanner.Scan() {
+			return "", cfg, types.New(types.ErrCodeInternal, "failed to read api key")
+		}
+		cfg.APIKey = strings.TrimSpace(scanner.Text())
+		if cfg.APIKey == "" {
+			fmt.Println("Error: API Key is required (type 'none' if not needed).")
+		}
+	}
+
+	for cfg.Model == "" {
+		fmt.Print("Model Name: ")
+		if !scanner.Scan() {
+			return "", cfg, types.New(types.ErrCodeInternal, "failed to read model")
+		}
+		cfg.Model = strings.TrimSpace(scanner.Text())
+		if cfg.Model == "" {
+			fmt.Println("Error: Model name cannot be empty.")
+		}
+	}
+
+	for cfg.BaseURL == "" {
+		fmt.Print("Base URL (e.g., http://localhost:11434/v1): ")
+		if !scanner.Scan() {
+			return "", cfg, types.New(types.ErrCodeInternal, "failed to read base url")
+		}
+		cfg.BaseURL = strings.TrimSpace(scanner.Text())
+		if cfg.BaseURL == "" {
+			fmt.Println("Error: Base URL is required for custom providers.")
+		} else if !strings.HasPrefix(cfg.BaseURL, "http") {
+			fmt.Println("Warning: Base URL usually starts with http:// or https://")
+		}
+	}
+
+	return name, cfg, nil
 }

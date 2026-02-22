@@ -14,8 +14,8 @@ type OpenRouterAdapter struct {
 }
 
 // NewOpenRouterAdapter instantiates the OpenRouter client
-func NewOpenRouterAdapter(apiKey string, model string) *OpenRouterAdapter {
-	config := openai.DefaultConfig(apiKey)
+func NewOpenRouterAdapter(api_key string, model string) *OpenRouterAdapter {
+	config := openai.DefaultConfig(api_key)
 	config.BaseURL = "https://openrouter.ai/api/v1"
 
 	if model == "" {

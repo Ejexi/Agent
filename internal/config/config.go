@@ -1,11 +1,13 @@
 package config
 
 import (
-	types "duckops/internal/types"
+	"duckops/internal/types"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
 
@@ -23,30 +25,20 @@ type Config struct {
 	Provider    string               `json:"provider"`
 }
 
-// LoadConfig reads the configuration from a file and overrides it via OS environment variables.
+// LoadConfig reads the configuration and expands environment variables.
 func LoadConfig(path string) (*Config, error) {
+	// 1. Load .env file automatically if it exists (Atomic operation)
+	if err := godotenv.Load(); err != nil {
+		// Log as info, since .env is optional in production environments (using system env)
+	}
+
 	viper.SetConfigFile(path)
-
-	// Enable reading from OS Environment Variabels
-	// Prefix will be "AGENT_"
-	viper.SetEnvPrefix("AGENT")
-
-	// Map dots in config keys to underscores in env vars (e.g. llm.openai.api_key -> AGENT_LLM_OPENAI_API_KEY)
-	replacer := strings.NewReplacer(".", "_")
-	viper.SetEnvKeyReplacer(replacer)
-	viper.AutomaticEnv()
-
-	// Explicitly bind standard OS env vars to config so you don't need 'AGENT_' prefix for API keys
-	viper.BindEnv("llm.openai.api_key", "OPENAI_API_KEY")
-	viper.BindEnv("llm.gemini.api_key", "GEMINI_API_KEY")
-	viper.BindEnv("llm.openrouter.api_key", "OPENROUTER_API_KEY")
-	viper.BindEnv("llm.lmstudio.api_key", "LMSTUDIO_API_KEY")
+	viper.AutomaticEnv() // Merge with system environment
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, types.Wrap(err, types.ErrCodeInternal, "failed to read config file")
 		}
-		// If file doesn't exist, we just return an empty config to be populated by setup
 	}
 
 	var conf Config
@@ -54,25 +46,39 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, types.Wrap(err, types.ErrCodeInternal, "failed to unmarshal config")
 	}
 
-	// Expand environment variables found within the config values (e.g., $(OPENROUTER_API_KEY) or ${OPENROUTER_API_KEY})
+	// 2. Perform Recursive Expansion on all LLM configurations
 	for provider, llmConf := range conf.LLMs {
-		// Convert $(VAR) to ${VAR} for os.ExpandEnv compatibility
-		expandedKey := strings.ReplaceAll(llmConf.APIKey, "$(", "${")
-		// Safely handle closing bracket if present for $() syntax
-		if strings.Contains(llmConf.APIKey, "$(") {
-			expandedKey = strings.ReplaceAll(expandedKey, ")", "}")
-		}
+		llmConf.APIKey = expandValue(provider, "api_key", llmConf.APIKey, true)
+		llmConf.Model = expandValue(provider, "model", llmConf.Model, false)
+		llmConf.BaseURL = expandValue(provider, "base_url", llmConf.BaseURL, false)
 
-		val := os.ExpandEnv(expandedKey)
-		// Clean up surrounding quotes and spaces that Windows users might accidentally include via CMD
-		val = strings.TrimSpace(val)
-		val = strings.Trim(val, `"'`)
-
-		llmConf.APIKey = val
 		conf.LLMs[provider] = llmConf
 	}
 
 	return &conf, nil
+}
+
+// expandValue resolves ${VAR} placeholders and performs sanitization.
+func expandValue(provider, field, rawValue string, isSecret bool) string {
+	if !strings.Contains(rawValue, "$") {
+		return rawValue
+	}
+
+	// Standardize syntax: convert $(VAR) to ${VAR} if exists
+	expanded := os.ExpandEnv(rawValue)
+
+	// Clean up potential artifacts (quotes, spaces)
+	expanded = strings.TrimSpace(expanded)
+	expanded = strings.Trim(expanded, `"'`)
+
+	// Production Validation: Check if expansion failed
+	if expanded == "" && rawValue != "" {
+		log.Printf("[WARNING] Config expansion for %s.%s resulted in an empty string. "+
+			"Verify that the environment variable is set in .env or system environment.",
+			provider, field)
+	}
+
+	return expanded
 }
 
 // SaveConfig writes the current configuration back to the file

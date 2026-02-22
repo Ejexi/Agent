@@ -1,26 +1,26 @@
 package kernel
 
 import (
-	"duckops/internal/domain"
+	"duckops/internal/tools/base"
 	types "duckops/internal/types"
 	"sync"
 )
 
 // Registry manages the available tools.
 type Registry struct {
-	tools map[string]domain.Tool
+	tools map[string]base.Tool
 	mu    sync.RWMutex
 }
 
 // NewRegistry creates a new tool registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]domain.Tool),
+		tools: make(map[string]base.Tool),
 	}
 }
 
 // Register adds a tool to the registry.
-func (r *Registry) Register(tool domain.Tool) error {
+func (r *Registry) Register(tool base.Tool) error {
 	if tool == nil {
 		return types.New(types.ErrCodeInvalidInput, "cannot register nil tool")
 	}
@@ -36,7 +36,7 @@ func (r *Registry) Register(tool domain.Tool) error {
 }
 
 // Get retrieves a tool by name.
-func (r *Registry) Get(name string) (domain.Tool, bool) {
+func (r *Registry) Get(name string) (base.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

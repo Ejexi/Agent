@@ -1,26 +1,20 @@
-env: "development"
+env: development
 
-# LLM Providers Configuration
-# We leave api_key blank or omit it so it is injected securely via Environment Variables by the OS.
-# Viper automatically overrides these based on the prefix 'AGENT_' and mapping '.' to '_'
-# Example:
-# Windows: $env:AGENT_LLM_OPENROUTER_API_KEY="sk-or-v1-..."
-# Linux/Mac: export AGENT_LLM_OPENROUTER_API_KEY="sk-or-v1-..."
+
+provider: ${ACTIVE_PROVIDER}
 
 llm:
   openai:
-    api_key: "$(OPENAI_API_KEY)"
-    model: "gpt-4"
-
-  gemini:
-    api_key: "$(GEMINI_API_KEY)"
-    model: "gemini-1.5-pro"
-
+    api_key: ${OPENAI_API_KEY}
+    model: ${OPENAI_MODEL} # gpt-4o
+  
   openrouter:
-    api_key: "$(OPENROUTER_API_KEY)"
-    model: "arcee-ai/trinity-large-preview:free"
+    api_key: ${OPENROUTER_API_KEY}
+    model: ${OR_MODEL}
+    base_url: "https://openrouter.ai/api/v1"
 
-  lmstudio:
-    api_key: ""
-    model: "local-model"
-    base_url: "http://localhost:1234/v1"
+  ollama:
+    base_url: ${OLLAMA_URL} # http://localhost:11434/v1
+    api_key: "none"
+    model: "llama3"
+

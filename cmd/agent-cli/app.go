@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"duckops/internal/adapters/cli"
 	"duckops/internal/adapters/llm"
 	"duckops/internal/adapters/setup"
-	"duckops/internal/adapters/tools/chat"
 	"duckops/internal/config"
 	"duckops/internal/kernel"
-	"context"
+	"duckops/internal/tools/implementations/chat"
+	"duckops/internal/tools/implementations/echo"
+	"duckops/internal/tools/implementations/scan"
 	"fmt"
 	"log"
 )
@@ -29,90 +31,29 @@ func InitApp() (*kernel.Kernel, string) {
 	// =========================================================
 	llmRegistry := llm.NewRegistryAdapter("openai")
 
-	// ---------- OpenAI ----------
-	openaiKey := ""
-	openaiModel := "gpt-4o"
+	// 2.1 Register Standard/Static Providers if needed,
+	// but now we prioritize the dynamic config.
 
-	if c, ok := cfg.LLMs["openai"]; ok {
-		if c.APIKey != "" {
-			openaiKey = c.APIKey
-		}
-		if c.Model != "" {
-			openaiModel = c.Model
-		}
-	}
-
-	if openaiKey != "" {
-		llmRegistry.Register(llm.NewOpenAIAdapter(openaiKey, openaiModel))
-	}
-
-	// ---------- Gemini ----------
-	geminiKey := ""
-	geminiModel := "gemini-1.5-flash"
-
-	if c, ok := cfg.LLMs["gemini"]; ok {
-		if c.APIKey != "" {
-			geminiKey = c.APIKey
-		}
-		if c.Model != "" {
-			geminiModel = c.Model
-		}
-	}
-
-	if geminiKey != "" {
+	// ---------- Gemini (Special Handling for generativeai-go SDK) ----------
+	if c, ok := cfg.LLMs["gemini"]; ok && c.APIKey != "" {
 		geminiAdapter, err := llm.NewGeminiAdapter(
 			context.Background(),
-			geminiKey,
-			geminiModel,
+			c.APIKey,
+			c.Model,
 		)
 		if err != nil {
 			log.Printf("Warning: Gemini init failed: %v", err)
 		} else {
 			llmRegistry.Register(geminiAdapter)
-			// Ideally defer geminiAdapter.Close() should be handled in a proper cleanup phase
 		}
 	}
 
-	// ---------- OpenRouter ----------
-	orKey := ""
-	orModel := "google/gemini-2.5-flash"
+	// 2.2 Register all other providers dynamically (including OpenAI, OpenRouter, and Custom)
+	// If they have a base_url, they will use the OpenAICompatibleAdapter automatically.
+	llmRegistry.RegisterFromConfig(cfg.LLMs)
 
-	if c, ok := cfg.LLMs["openrouter"]; ok {
-		if c.APIKey != "" {
-			orKey = c.APIKey
-		}
-		if c.Model != "" {
-			orModel = c.Model
-		}
-	}
-
-	if orKey != "" {
-		llmRegistry.Register(
-			llm.NewOpenRouterAdapter(orKey, orModel),
-		)
-	}
-
-	// ---------- LM Studio ----------
-	lmKey := ""
-	lmModel := "local-model"
-	lmBaseURL := "http://localhost:1234/v1"
-
-	if c, ok := cfg.LLMs["lmstudio"]; ok {
-		if c.APIKey != "" {
-			lmKey = c.APIKey
-		}
-		if c.Model != "" {
-			lmModel = c.Model
-		}
-		if c.BaseURL != "" {
-			lmBaseURL = c.BaseURL
-		}
-	}
-
-	// For LM Studio, we always register it as it's a local service to try out and doesn't require keys usually
-	llmRegistry.Register(
-		llm.NewLMStudioAdapter(lmKey, lmModel, lmBaseURL),
-	)
+	// Explicitly handle standard OpenAI if not already handled by dynamic config logic
+	// (RegisterFromConfig handles it if it's in the map)
 
 	// =========================================================
 	// 3. Build Kernel
@@ -130,9 +71,18 @@ func InitApp() (*kernel.Kernel, string) {
 	// 4. Register Tools
 	// =========================================================
 	chatTool := chat.NewChatTool(deps.LLM)
-
 	if err := k.RegisterTool(chatTool); err != nil {
 		log.Fatalf("Chat tool registration failed: %v", err)
+	}
+
+	echoTool := echo.NewEchoTool()
+	if err := k.RegisterTool(echoTool); err != nil {
+		log.Fatalf("Echo tool registration failed: %v", err)
+	}
+
+	scanTool := scan.NewScanTool(deps.LLM, deps.Memory)
+	if err := k.RegisterTool(scanTool); err != nil {
+		log.Fatalf("Scan tool registration failed: %v", err)
 	}
 
 	fmt.Println("Agent Kernel initialized successfully.")
@@ -145,8 +95,16 @@ func InitApp() (*kernel.Kernel, string) {
 	setupPrompter := cli.NewSetupPrompter()
 
 	setupSvc := kernel.NewSetupService(setupRepo, setupPrompter)
-	providers := deps.LLM.List()
 
+	// [New] Dynamic Provider Configuration
+	if err := setupSvc.ConfigureCustomProvider(cfg); err != nil {
+		log.Printf("Warning: Custom provider configuration failed: %v", err)
+	}
+
+	// Re-sync registry in case a new provider was added during configuration
+	llmRegistry.RegisterFromConfig(cfg.LLMs)
+
+	providers := llmRegistry.List()
 	selectedProvider, err := setupSvc.GetProvider(providers)
 	if err != nil {
 		log.Fatalf("Provider setup failed: %v", err)

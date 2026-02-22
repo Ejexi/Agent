@@ -11,4 +11,5 @@ type SetupRepository interface {
 // SetupPrompter handles user interaction for setup procedures.
 type SetupPrompter interface {
 	SelectProvider(providers []string) (string, error)
+	PromptCustomProvider() (name string, cfg config.LLMConfig, err error)
 }

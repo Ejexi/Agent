@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"duckops/internal/config"
 	"duckops/internal/ports"
 	"sync"
 )
@@ -58,4 +59,32 @@ func (r *RegistryAdapter) List() []string {
 		names = append(names, k)
 	}
 	return names
+}
+
+// RegisterFromConfig iterates through the provided configuration and registers all LLMs.
+// It uses the OpenAICompatibleAdapter for any provider that has a BaseURL,
+// and specialized adapters for known providers.
+func (r *RegistryAdapter) RegisterFromConfig(cfgs map[string]config.LLMConfig) {
+	for name, cfg := range cfgs {
+		if cfg.APIKey == "" && name != "lmstudio" {
+			continue // Skip if no API key provided (except for local LMStudio)
+		}
+
+		switch name {
+		case "openai":
+			r.Register(NewOpenAIAdapter(cfg.APIKey, cfg.Model))
+		case "openrouter":
+			r.Register(NewOpenRouterAdapter(cfg.APIKey, cfg.Model))
+		case "lmstudio":
+			r.Register(NewLMStudioAdapter(cfg.APIKey, cfg.Model, cfg.BaseURL))
+		case "gemini":
+			// Gemini is handled separately in InitApp due to context requirement
+			continue
+		default:
+			// Treat everything else with a BaseURL as a custom compatible provider
+			if cfg.BaseURL != "" {
+				r.Register(NewOpenAICompatibleAdapter(name, cfg.APIKey, cfg.Model, cfg.BaseURL))
+			}
+		}
+	}
 }

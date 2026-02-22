@@ -1,9 +1,10 @@
 package scan
 
 import (
+	"context"
 	"duckops/internal/domain"
 	"duckops/internal/ports"
-	"context"
+	"duckops/internal/tools/base"
 	"fmt"
 )
 
@@ -13,6 +14,28 @@ type ScanTool struct {
 	// It doesn't care if they are implemented by a Mock, CLI, or an actual API.
 	llmRegistry ports.LLMRegistry
 	memory      ports.MemoryPort
+}
+
+// ExecuteRaw implements [base.Tool].
+func (t *ScanTool) ExecuteRaw(ctx context.Context, input map[string]interface{}) (domain.Result, error) {
+	// Delegate to Run by creating a virtual task
+	return t.Run(ctx, domain.Task{
+		ID:   "direct_exec_" + t.Name(),
+		Tool: t.Name(),
+		Args: input,
+	})
+}
+
+// Schema implements [base.Tool].
+func (t *ScanTool) Schema() base.ToolSchema {
+	return base.ToolSchema{
+		Name:        "scan",
+		Description: "Perform a security scan on a target using LLM analysis and memory storage.",
+		Parameters: map[string]string{
+			"target":      "string - The target to scan",
+			"ai_provider": "string - Optional. The AI provider to use (default: openai)",
+		},
+	}
 }
 
 // NewScanTool creates a new instance of ScanTool.
