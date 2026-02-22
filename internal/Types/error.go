@@ -11,22 +11,22 @@ type ErrorCode string
 const (
 
 	// General
-	ErrCodeInternal     ErrorCode = "ERR_1000"
-	ErrCodeNotFound     ErrorCode = "ERR_1001"
-	ErrCodeInvalidInput ErrorCode = "ERR_1002"
+	ErrCodeInternal     ErrorCode = "ERR_DUCKOPS_1000"
+	ErrCodeNotFound     ErrorCode = "ERR_DUCKOPS_1001"
+	ErrCodeInvalidInput ErrorCode = "ERR_DUCKOPS_1002"
 
 	// Agent
 	
-	ErrCodeAgentFailed ErrorCode = "ERR_2001"
+	ErrCodeAgentFailed ErrorCode = "ERR_DUCKOPS_2001"
 
 	// Tool
-	ErrCodeToolNotFound   ErrorCode = "ERR_3000"
-	ErrCodeToolExecution  ErrorCode = "ERR_3001"
-	ErrCodeToolValidation ErrorCode = "ERR_3002"
+	ErrCodeToolNotFound   ErrorCode = "ERR_DUCKOPS_3000"
+	ErrCodeToolExecution  ErrorCode = "ERR_DUCKOPS_3001"
+	ErrCodeToolValidation ErrorCode = "ERR_DUCKOPS_3002"
 
 	// Security
-	ErrCodeAuthFailed       ErrorCode = "ERR_4000"
-	ErrCodePermissionDenied ErrorCode = "ERR_4003"
+	ErrCodeAuthFailed       ErrorCode = "ERR_DUCKOPS_4000"
+	ErrCodePermissionDenied ErrorCode = "ERR_DUCKOPS_4003"
 )
 
 type AppError struct {
