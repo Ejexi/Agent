@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"agent/internal/types"
+	"duckops/internal/types"
 	"bufio"
 	"fmt"
 	"os"

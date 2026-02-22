@@ -1,6 +1,6 @@
 package ports
 
-import "agent/internal/config"
+import "duckops/internal/config"
 
 // SetupRepository handles the persistence of the agent configuration.
 type SetupRepository interface {

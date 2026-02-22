@@ -1,9 +1,9 @@
 package kernel
 
 import (
-	"agent/internal/domain"
-	"agent/internal/ports"
-	types "agent/internal/types"
+	"duckops/internal/domain"
+	"duckops/internal/ports"
+	types "duckops/internal/types"
 	"context"
 	"log"
 )

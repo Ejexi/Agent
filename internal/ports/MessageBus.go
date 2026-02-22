@@ -1,7 +1,7 @@
 package ports
 
 import (
-	"agent/internal/domain"
+	"duckops/internal/domain"
 	"context"
 )
 

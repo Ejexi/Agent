@@ -1,9 +1,9 @@
 package chat
 
 import (
-	"agent/internal/domain"
-	"agent/internal/ports"
-	"agent/internal/types"
+	"duckops/internal/domain"
+	"duckops/internal/ports"
+	"duckops/internal/types"
 	"context"
 )
 

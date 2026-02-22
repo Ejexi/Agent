@@ -1,12 +1,12 @@
 package main
 
 import (
-	"agent/internal/adapters/cli"
-	"agent/internal/adapters/llm"
-	"agent/internal/adapters/setup"
-	"agent/internal/adapters/tools/chat"
-	"agent/internal/config"
-	"agent/internal/kernel"
+	"duckops/internal/adapters/cli"
+	"duckops/internal/adapters/llm"
+	"duckops/internal/adapters/setup"
+	"duckops/internal/adapters/tools/chat"
+	"duckops/internal/config"
+	"duckops/internal/kernel"
 	"context"
 	"fmt"
 	"log"

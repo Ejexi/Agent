@@ -1,8 +1,8 @@
 package setup
 
 import (
-	"agent/internal/config"
-	"agent/internal/types"
+	"duckops/internal/config"
+	"duckops/internal/types"
 	"encoding/json"
 	"os"
 	"path/filepath"

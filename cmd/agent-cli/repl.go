@@ -1,8 +1,8 @@
 package main
 
 import (
-	"agent/internal/domain"
-	"agent/internal/kernel"
+	"duckops/internal/domain"
+	"duckops/internal/kernel"
 	"bufio"
 	"context"
 	"fmt"

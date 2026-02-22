@@ -1,8 +1,8 @@
 package scan
 
 import (
-	"agent/internal/domain"
-	"agent/internal/ports"
+	"duckops/internal/domain"
+	"duckops/internal/ports"
 	"context"
 	"fmt"
 )

@@ -1,7 +1,7 @@
 package config
 
 import (
-	types "agent/internal/types"
+	types "duckops/internal/types"
 	"fmt"
 	"os"
 	"strings"

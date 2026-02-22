@@ -1,8 +1,8 @@
 package kernel
 
 import (
-	"agent/internal/domain"
-	types "agent/internal/types"
+	"duckops/internal/domain"
+	types "duckops/internal/types"
 	"context"
 )
 

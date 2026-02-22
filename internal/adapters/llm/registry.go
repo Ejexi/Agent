@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"agent/internal/ports"
+	"duckops/internal/ports"
 	"sync"
 )
 

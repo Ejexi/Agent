@@ -1,9 +1,9 @@
 package kernel
 
 import (
-	"agent/internal/config"
-	"agent/internal/ports"
-	"agent/internal/types"
+	"duckops/internal/config"
+	"duckops/internal/ports"
+	"duckops/internal/types"
 )
 
 // SetupService handles the first-run configuration logic for the Agent.
