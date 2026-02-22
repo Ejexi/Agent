@@ -1,7 +1,7 @@
 package llm
 
 import (
-	types "agent/internal/Types"
+	types "agent/internal/types"
 	"context"
 
 	"github.com/google/generative-ai-go/genai"

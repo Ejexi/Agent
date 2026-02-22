@@ -9,13 +9,18 @@ env: "development"
 
 llm:
   openai:
-    api_key: ""
+    api_key: "$(OPENAI_API_KEY)"
     model: "gpt-4"
 
   gemini:
-    api_key: ""
+    api_key: "$(GEMINI_API_KEY)"
     model: "gemini-1.5-pro"
 
   openrouter:
+    api_key: "$(OPENROUTER_API_KEY)"
+    model: "arcee-ai/trinity-large-preview:free"
+
+  lmstudio:
     api_key: ""
-    model: "google/gemini-2.5-flash"
+    model: "local-model"
+    base_url: "http://localhost:1234/v1"

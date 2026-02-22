@@ -22,7 +22,7 @@ The project is divided into the following strict layers based on our internal ru
 - `internal/tools/`: The actual DevSecOps tools (e.g., `scan_tool`). These tools are instantiated by injecting specific `Ports` as dependencies. **(tools → ports + domain)**
 - `internal/adapters/`: The concrete implementations that connect the outside world to the system (e.g., actual RabbitMQ code that implements the `ports.BusPort` interface). **(adapters → ports only)**
 - `internal/config/`: Configuration management module utilizing Viper to read `config.yaml` and OS-level Environment Variables via 12-factor methodology.
-- `cmd/`: The application entrypoints. This is where we wire up all the pieces (Adapters + Tools + Kernel) to start a specific service. **(cmd → kernel only)**
+- `cmd/agent-cli/`: The application entrypoints. This is where we wire up all the pieces (Adapters + Tools + Kernel) to start a specific service. We intentionally split this into `main.go`, `app.go` (for DI and setup), and `repl.go` (for the interactive loop) to maintain Single Responsibility. **(cmd → kernel only)**
 
 ** Forbidden Operations (Golden Rules):**
 
@@ -94,7 +94,7 @@ type Tool interface {
    ```
 
 4. **Register the Tool in the Entrypoint:**
-   In your service entrypoint (e.g., `cmd/agent-cli/main.go`), instantiate the tool with its required Ports, then register it to the Kernel:
+   In your service entrypoint (e.g., `cmd/agent-cli/app.go`), instantiate the tool with its required Ports, then register it to the Kernel:
    ```go
    sastTool := sast.NewSastTool(deps.LLM)
    k.RegisterTool(sastTool)
@@ -175,22 +175,38 @@ This pattern applies to everything:
 
 The application configures itself using a hybrid YAML + Environment Variable approach managed by **Viper**.
 
-- Base configurations (like models) reside in `config.yaml`.
+- Base configurations (like models and base URLs) reside in `config.yaml`.
 - Secrets (like API keys) MUST be injected via Environment Variables.
 
-**Format:** `AGENT_` + `YAML_PATH_TO_KEY` (replacing `.` with `_`).
+Note: Our configuration module uses `os.ExpandEnv` combined with Viper, so you can safely inject variables directly inside `config.yaml` using the `$(VAR)` or `${VAR}` syntax.
 
-#### Example Usage:
+#### Example `config.yaml`:
+
+```yaml
+env: "development"
+llm:
+  openai:
+    api_key: "$(OPENAI_API_KEY)"
+    model: "gpt-4"
+  openrouter:
+    api_key: "$(OPENROUTER_API_KEY)"
+    model: "arcee-ai/trinity-large-preview:free"
+  lmstudio:
+    api_key: "not-needed"
+    model: "local-model"
+    base_url: "http://localhost:1234/v1"
+```
+
+#### Running the Agent (from the terminal):
 
 ```bash
-# Windows
-$env:AGENT_LLM_OPENAI_API_KEY="sk-proj..."
+# Windows (PowerShell)
+$env:OPENROUTER_API_KEY="sk-or-v1-..."
+go run ./cmd/agent-cli
 
 # Linux / Mac
-export AGENT_LLM_GEMINI_API_KEY="AIzaSy..."
-
-# Run the agent
-go run ./cmd/agent-cli/main.go
+export OPENROUTER_API_KEY="sk-or-v1-..."
+go run ./cmd/agent-cli
 ```
 
 ---

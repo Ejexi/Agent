@@ -1,9 +1,9 @@
 package kernel
 
 import (
-	types "agent/internal/Types"
 	"agent/internal/domain"
 	"agent/internal/ports"
+	types "agent/internal/types"
 	"context"
 	"log"
 )

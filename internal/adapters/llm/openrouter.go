@@ -1,7 +1,7 @@
 package llm
 
 import (
-	types "agent/internal/Types"
+	types "agent/internal/types"
 	"context"
 
 	"github.com/sashabaranov/go-openai"
@@ -16,11 +16,10 @@ type OpenRouterAdapter struct {
 // NewOpenRouterAdapter instantiates the OpenRouter client
 func NewOpenRouterAdapter(apiKey string, model string) *OpenRouterAdapter {
 	config := openai.DefaultConfig(apiKey)
-	// Override the BaseURL to point to OpenRouter
 	config.BaseURL = "https://openrouter.ai/api/v1"
 
 	if model == "" {
-		model = "google/gemini-2.5-flash" // Example default fallback
+		model = "arcee-ai/trinity-large-preview:free" // Example default fallback
 	}
 
 	return &OpenRouterAdapter{
@@ -41,6 +40,7 @@ func (o *OpenRouterAdapter) Generate(ctx context.Context, prompt string) (string
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
+		MaxTokens: 5000,
 	}
 	resp, err := o.client.CreateChatCompletion(ctx, req)
 	if err != nil {

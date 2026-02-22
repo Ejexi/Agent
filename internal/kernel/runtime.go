@@ -1,8 +1,8 @@
 package kernel
 
 import (
-	types "agent/internal/Types"
 	"agent/internal/domain"
+	types "agent/internal/types"
 	"context"
 )
 

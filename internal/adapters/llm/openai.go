@@ -1,7 +1,7 @@
 package llm
 
 import (
-	types "agent/internal/Types"
+	types "agent/internal/types"
 	"context"
 
 	"github.com/sashabaranov/go-openai"
@@ -37,6 +37,7 @@ func (a *OpenAIAdapter) Generate(ctx context.Context, prompt string) (string, er
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
+		MaxTokens: 5000,
 	}
 	resp, err := a.client.CreateChatCompletion(ctx, req)
 	if err != nil {
