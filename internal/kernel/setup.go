@@ -2,9 +2,9 @@ package kernel
 
 import (
 	"bufio"
-	"duckops/internal/config"
-	"duckops/internal/ports"
-	"duckops/internal/types"
+	"github.com/SecDuckOps/Agent/internal/config"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	"github.com/SecDuckOps/Shared/types"
 	"fmt"
 	"os"
 	"strings"

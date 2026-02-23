@@ -1,18 +1,22 @@
 package main
 
 import (
-	"duckops/internal/domain"
-	"duckops/internal/kernel"
 	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/SecDuckOps/Agent/internal/adapters/rabbitmq"
+	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/Agent/internal/kernel"
+	shared "github.com/SecDuckOps/Shared"
+	"github.com/SecDuckOps/Shared/events"
 )
 
 // RunInteractiveMode starts the terminal REPL loop for the DevSecOps agent.
-func RunInteractiveMode(k *kernel.Kernel, selectedProvider string) {
+func RunInteractiveMode(k *kernel.Kernel, selectedProvider string, mode string) {
 	selectedTool := "chat"
 
 	fmt.Println("\n=======================================================")
@@ -62,15 +66,49 @@ func RunInteractiveMode(k *kernel.Kernel, selectedProvider string) {
 		}
 
 		// =====================================================
-		// Execute Task
+		// Execute / Dispatch Task
 		// =====================================================
+
+		if mode == "cloud" {
+			fmt.Printf("[Cloud] Dispatching request to server...\n")
+			// In cloud mode, we need a message bus. If not set, initialize it.
+			if k.Deps.MessageBus == nil {
+				rabbitURL := os.Getenv("RABBITMQ_URL")
+				if rabbitURL == "" {
+					rabbitURL = "amqp://guest:guest@localhost:5672/"
+				}
+				bus, err := rabbitmq.NewAdapter(rabbitmq.Config{URL: rabbitURL})
+				if err != nil {
+					fmt.Printf("[Error] Failed to connect to server bus: %v\n", err)
+					continue
+				}
+				k.SetMessageBus(bus)
+			}
+
+			event := events.RawInputReceived{
+				ID:        fmt.Sprintf("raw-%d", time.Now().UnixNano()),
+				Text:      input,
+				Source:    "cli",
+				Timestamp: time.Now(),
+			}
+
+			err := k.Deps.MessageBus.PublishEvent(context.Background(), shared.QueueRawInput, event)
+			if err != nil {
+				fmt.Printf("[Cloud Error] Failed to send to server: %v\n", err)
+			} else {
+				fmt.Printf("[Cloud] Request sent. Waiting for server processing (check logs).\n")
+			}
+			continue
+		}
+
+		// Standalone Mode (Local execution)
 		args := map[string]interface{}{
 			"ai_provider": selectedProvider,
 			"prompt":      input,
 		}
 
 		task := domain.Task{
-			ID: fmt.Sprintf("%s-%d", selectedTool, time.Now().UnixNano()),
+			ID:   fmt.Sprintf("%s-%d", selectedTool, time.Now().UnixNano()),
 			Tool: selectedTool,
 			Args: args,
 		}

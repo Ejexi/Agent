@@ -2,8 +2,8 @@ package cli
 
 import (
 	"bufio"
-	"duckops/internal/config"
-	"duckops/internal/types"
+	"github.com/SecDuckOps/Agent/internal/config"
+	"github.com/SecDuckOps/Shared/types"
 	"fmt"
 	"os"
 	"strconv"

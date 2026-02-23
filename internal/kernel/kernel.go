@@ -2,17 +2,19 @@ package kernel
 
 import (
 	"context"
-	"duckops/internal/domain"
-	"duckops/internal/ports"
-	"duckops/internal/tools/base"
-	types "duckops/internal/types"
+
+	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	"github.com/SecDuckOps/Agent/internal/tools/base"
+	types "github.com/SecDuckOps/Shared/types"
+	shared_domain "github.com/SecDuckOps/Shared/llm/domain"
 )
 
 // Dependencies holds all external ports needed by the kernel.
 type Dependencies struct {
 	MessageBus ports.BusPort
 	Memory     ports.MemoryPort
-	LLM        ports.LLMRegistry
+	LLM        shared_domain.LLMRegistry
 }
 
 // Kernel is the execution authority coordinates registry, runtime and dispatching.

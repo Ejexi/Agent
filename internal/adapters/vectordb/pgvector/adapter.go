@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"duckops/internal/ports"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	"github.com/SecDuckOps/Shared/types"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 	pgv "github.com/pgvector/pgvector-go"
@@ -45,7 +46,7 @@ func (c Config) DSN() string {
 func NewAdapter(cfg Config) (*Adapter, error) {
 	db, err := sql.Open("postgres", cfg.DSN())
 	if err != nil {
-		return nil, fmt.Errorf("pgvector: failed to open connection: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "pgvector: failed to open connection")
 	}
 
 	// Connection pool tuning
@@ -55,7 +56,7 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("pgvector: failed to ping: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "pgvector: failed to ping")
 	}
 
 	return &Adapter{db: db}, nil
@@ -78,7 +79,7 @@ func (a *Adapter) Migrate(ctx context.Context) error {
 
 	for _, q := range queries {
 		if _, err := a.db.ExecContext(ctx, q); err != nil {
-			return fmt.Errorf("pgvector: migration failed: %w", err)
+			return types.Wrap(err, types.ErrCodeInternal, "pgvector: migration failed")
 		}
 	}
 
@@ -89,7 +90,7 @@ func (a *Adapter) Migrate(ctx context.Context) error {
 func (a *Adapter) Upsert(ctx context.Context, doc ports.EmbeddingDocument) error {
 	metadataJSON, err := json.Marshal(doc.Metadata)
 	if err != nil {
-		return fmt.Errorf("pgvector: marshal metadata: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "pgvector: marshal metadata")
 	}
 
 	vec := pgv.NewVector(doc.Vector)
@@ -105,7 +106,7 @@ func (a *Adapter) Upsert(ctx context.Context, doc ports.EmbeddingDocument) error
 		doc.ID, doc.Content, vec, doc.Source, metadataJSON,
 	)
 	if err != nil {
-		return fmt.Errorf("pgvector: upsert embedding: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "pgvector: upsert embedding")
 	}
 
 	return nil
@@ -152,7 +153,7 @@ func (a *Adapter) Search(ctx context.Context, query ports.VectorSearchQuery) ([]
 
 	rows, err := a.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
-		return nil, fmt.Errorf("pgvector: search: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "pgvector: search")
 	}
 	defer rows.Close()
 
@@ -164,7 +165,7 @@ func (a *Adapter) Search(ctx context.Context, query ports.VectorSearchQuery) ([]
 		var score float32
 
 		if err := rows.Scan(&doc.ID, &doc.Content, &vec, &doc.Source, &metadataJSON, &score); err != nil {
-			return nil, fmt.Errorf("pgvector: scan result row: %w", err)
+			return nil, types.Wrap(err, types.ErrCodeInternal, "pgvector: scan result row")
 		}
 
 		doc.Vector = vec.Slice()
@@ -190,7 +191,7 @@ func (a *Adapter) Delete(ctx context.Context, id string) error {
 		`DELETE FROM embeddings WHERE id = $1`, id,
 	)
 	if err != nil {
-		return fmt.Errorf("pgvector: delete: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "pgvector: delete")
 	}
 	return nil
 }
@@ -201,7 +202,7 @@ func (a *Adapter) DeleteBySource(ctx context.Context, source string) error {
 		`DELETE FROM embeddings WHERE source = $1`, source,
 	)
 	if err != nil {
-		return fmt.Errorf("pgvector: delete by source: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "pgvector: delete by source")
 	}
 	return nil
 }

@@ -1,8 +1,8 @@
 package setup
 
 import (
-	"duckops/internal/config"
-	"duckops/internal/types"
+	"github.com/SecDuckOps/Agent/internal/config"
+	"github.com/SecDuckOps/Shared/types"
 	"encoding/json"
 	"os"
 	"path/filepath"

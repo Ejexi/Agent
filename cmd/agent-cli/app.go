@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
-	"duckops/internal/adapters/cli"
-	"duckops/internal/adapters/llm"
-	"duckops/internal/adapters/setup"
-	"duckops/internal/config"
-	"duckops/internal/kernel"
-	"duckops/internal/tools/implementations/chat"
-	"duckops/internal/tools/implementations/echo"
-	"duckops/internal/tools/implementations/scan"
 	"fmt"
 	"log"
+
+	"github.com/SecDuckOps/Agent/internal/adapters/cli"
+	"github.com/SecDuckOps/Agent/internal/adapters/setup"
+	"github.com/SecDuckOps/Agent/internal/config"
+	"github.com/SecDuckOps/Agent/internal/kernel"
+	"github.com/SecDuckOps/Agent/internal/tools/implementations/chat"
+	"github.com/SecDuckOps/Agent/internal/tools/implementations/echo"
+	"github.com/SecDuckOps/Agent/internal/tools/implementations/scan"
+
+	"github.com/SecDuckOps/Shared/llm/application"
+	"github.com/SecDuckOps/Shared/llm/domain"
+	"github.com/SecDuckOps/Shared/llm/infrastructure"
 )
 
 // InitApp orchestrates the Dependency Injection, configuration, and setup process
@@ -29,14 +33,26 @@ func InitApp() (*kernel.Kernel, string) {
 	// =========================================================
 	// 2. Initialize LLM Registry
 	// =========================================================
-	llmRegistry := llm.NewRegistryAdapter("openai")
+	sharedCfg := domain.Config{
+		Default:   "openai",
+		Providers: make(map[string]domain.ProviderConfig),
+	}
+	for name, c := range cfg.LLMs {
+		sharedCfg.Providers[name] = domain.ProviderConfig{
+			APIKey:  c.APIKey,
+			Model:   c.Model,
+			BaseURL: c.BaseURL,
+		}
+	}
 
-	// 2.1 Register Standard/Static Providers if needed,
-	// but now we prioritize the dynamic config.
+	llmRegistry, err := application.NewLLMRegistry(sharedCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize LLM Registry: %v", err)
+	}
 
 	// ---------- Gemini (Special Handling for generativeai-go SDK) ----------
 	if c, ok := cfg.LLMs["gemini"]; ok && c.APIKey != "" {
-		geminiAdapter, err := llm.NewGeminiAdapter(
+		geminiAdapter, err := infrastructure.NewGeminiAdapter(
 			context.Background(),
 			c.APIKey,
 			c.Model,
@@ -47,13 +63,6 @@ func InitApp() (*kernel.Kernel, string) {
 			llmRegistry.Register(geminiAdapter)
 		}
 	}
-
-	// 2.2 Register all other providers dynamically (including OpenAI, OpenRouter, and Custom)
-	// If they have a base_url, they will use the OpenAICompatibleAdapter automatically.
-	llmRegistry.RegisterFromConfig(cfg.LLMs)
-
-	// Explicitly handle standard OpenAI if not already handled by dynamic config logic
-	// (RegisterFromConfig handles it if it's in the map)
 
 	// =========================================================
 	// 3. Build Kernel
@@ -102,7 +111,15 @@ func InitApp() (*kernel.Kernel, string) {
 	}
 
 	// Re-sync registry in case a new provider was added during configuration
-	llmRegistry.RegisterFromConfig(cfg.LLMs)
+	newSharedCfg := make(map[string]domain.ProviderConfig)
+	for name, c := range cfg.LLMs {
+		newSharedCfg[name] = domain.ProviderConfig{
+			APIKey:  c.APIKey,
+			Model:   c.Model,
+			BaseURL: c.BaseURL,
+		}
+	}
+	llmRegistry.RegisterFromConfig(newSharedCfg)
 
 	providers := llmRegistry.List()
 	selectedProvider, err := setupSvc.GetProvider(providers)

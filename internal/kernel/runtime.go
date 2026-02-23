@@ -2,8 +2,8 @@ package kernel
 
 import (
 	"context"
-	"duckops/internal/domain"
-	types "duckops/internal/types"
+	"github.com/SecDuckOps/Agent/internal/domain"
+	types "github.com/SecDuckOps/Shared/types"
 	"sync"
 )
 

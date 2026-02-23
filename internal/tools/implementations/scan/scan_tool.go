@@ -2,24 +2,27 @@ package scan
 
 import (
 	"context"
-	"duckops/internal/domain"
-	"duckops/internal/ports"
-	"duckops/internal/tools/base"
 	"fmt"
+
+	"github.com/SecDuckOps/Shared/llm/domain"
+
+	agent_domain "github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	"github.com/SecDuckOps/Agent/internal/tools/base"
 )
 
 // ScanTool implements the domain.Tool interface.
 type ScanTool struct {
 	// The tool requires these ports to function.
 	// It doesn't care if they are implemented by a Mock, CLI, or an actual API.
-	llmRegistry ports.LLMRegistry
+	llmRegistry domain.LLMRegistry
 	memory      ports.MemoryPort
 }
 
 // ExecuteRaw implements [base.Tool].
-func (t *ScanTool) ExecuteRaw(ctx context.Context, input map[string]interface{}) (domain.Result, error) {
+func (t *ScanTool) ExecuteRaw(ctx context.Context, input map[string]interface{}) (agent_domain.Result, error) {
 	// Delegate to Run by creating a virtual task
-	return t.Run(ctx, domain.Task{
+	return t.Run(ctx, agent_domain.Task{
 		ID:   "direct_exec_" + t.Name(),
 		Tool: t.Name(),
 		Args: input,
@@ -40,7 +43,7 @@ func (t *ScanTool) Schema() base.ToolSchema {
 
 // NewScanTool creates a new instance of ScanTool.
 // Notice how we inject the exact Ports this tool needs.
-func NewScanTool(llmRegistry ports.LLMRegistry, memory ports.MemoryPort) *ScanTool {
+func NewScanTool(llmRegistry domain.LLMRegistry, memory ports.MemoryPort) *ScanTool {
 	return &ScanTool{
 		llmRegistry: llmRegistry,
 		memory:      memory,
@@ -53,12 +56,12 @@ func (t *ScanTool) Name() string {
 }
 
 // Run executes the scanning process.
-func (t *ScanTool) Run(ctx context.Context, task domain.Task) (domain.Result, error) {
+func (t *ScanTool) Run(ctx context.Context, task agent_domain.Task) (agent_domain.Result, error) {
 	// Example flow:
 	// 1- Parse the Target from task args
 	target, ok := task.Args["target"].(string)
 	if !ok {
-		return domain.Result{
+		return agent_domain.Result{
 			TaskID:  task.ID,
 			Success: false,
 			Status:  "failed",
@@ -81,8 +84,8 @@ func (t *ScanTool) Run(ctx context.Context, task domain.Task) (domain.Result, er
 
 		provider := t.llmRegistry.Get(providerName)
 		if provider != nil {
-			report, err := provider.Generate(ctx, []ports.Message{
-				{Role: ports.RoleUser, Content: "Analyze this scan target: " + target},
+			report, err := provider.Generate(ctx, []domain.Message{
+				{Role: domain.RoleUser, Content: "Analyze this scan target: " + target},
 			}, nil)
 			if err == nil {
 				llmReport = report
@@ -91,7 +94,7 @@ func (t *ScanTool) Run(ctx context.Context, task domain.Task) (domain.Result, er
 	}
 
 	// 4- Return Result
-	return domain.Result{
+	return agent_domain.Result{
 		TaskID:  task.ID,
 		Success: true,
 		Status:  "scan completed successfully",

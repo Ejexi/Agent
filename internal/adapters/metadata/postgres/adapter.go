@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"duckops/internal/domain"
-	"duckops/internal/ports"
+	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	"github.com/SecDuckOps/Shared/types"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
@@ -44,7 +45,7 @@ func (c Config) DSN() string {
 func NewAdapter(cfg Config) (*Adapter, error) {
 	db, err := sql.Open("postgres", cfg.DSN())
 	if err != nil {
-		return nil, fmt.Errorf("postgres: failed to open connection: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: failed to open connection")
 	}
 
 	// Connection pool tuning
@@ -54,7 +55,7 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("postgres: failed to ping: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: failed to ping")
 	}
 
 	return &Adapter{db: db}, nil
@@ -95,7 +96,7 @@ func (a *Adapter) Migrate(ctx context.Context) error {
 
 	for _, q := range queries {
 		if _, err := a.db.ExecContext(ctx, q); err != nil {
-			return fmt.Errorf("postgres: migration failed: %w", err)
+			return types.Wrap(err, types.ErrCodeInternal, "postgres: migration failed")
 		}
 	}
 	return nil
@@ -105,7 +106,7 @@ func (a *Adapter) Migrate(ctx context.Context) error {
 func (a *Adapter) SaveScanResult(ctx context.Context, result *domain.ScanResult) error {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("postgres: begin tx: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "postgres: begin tx")
 	}
 	defer tx.Rollback()
 
@@ -123,7 +124,7 @@ func (a *Adapter) SaveScanResult(ctx context.Context, result *domain.ScanResult)
 		summaryJSON, result.StartedAt, result.CompletedAt, result.Error,
 	)
 	if err != nil {
-		return fmt.Errorf("postgres: insert scan_result: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "postgres: insert scan_result")
 	}
 
 	// Insert vulnerabilities
@@ -137,7 +138,7 @@ func (a *Adapter) SaveScanResult(ctx context.Context, result *domain.ScanResult)
 			v.Location, v.Line, v.CVE, v.CVSS, v.Remediation, refsJSON, v.DetectedAt,
 		)
 		if err != nil {
-			return fmt.Errorf("postgres: insert vulnerability %s: %w", v.ID, err)
+			return types.Wrapf(err, types.ErrCodeInternal, "postgres: insert vulnerability %s", v.ID)
 		}
 	}
 
@@ -162,7 +163,7 @@ func (a *Adapter) GetScanResult(ctx context.Context, scanID string) (*domain.Sca
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("postgres: scan scan_result: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: scan scan_result")
 	}
 
 	json.Unmarshal(summaryJSON, &result.Summary)
@@ -209,7 +210,7 @@ func (a *Adapter) ListScanResults(ctx context.Context, filter ports.ScanResultFi
 
 	rows, err := a.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: list scan_results: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: list scan_results")
 	}
 	defer rows.Close()
 
@@ -221,7 +222,7 @@ func (a *Adapter) ListScanResults(ctx context.Context, filter ports.ScanResultFi
 			&r.ScanID, &r.ScannerType, &r.Status,
 			&summaryJSON, &r.StartedAt, &r.CompletedAt, &r.Error,
 		); err != nil {
-			return nil, fmt.Errorf("postgres: scan row: %w", err)
+			return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: scan row")
 		}
 		json.Unmarshal(summaryJSON, &r.Summary)
 		results = append(results, &r)
@@ -237,7 +238,7 @@ func (a *Adapter) GetVulnerabilities(ctx context.Context, scanID string) ([]doma
 		 FROM vulnerabilities WHERE scan_id = $1 ORDER BY detected_at`, scanID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: query vulnerabilities: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: query vulnerabilities")
 	}
 	defer rows.Close()
 
@@ -250,7 +251,7 @@ func (a *Adapter) GetVulnerabilities(ctx context.Context, scanID string) ([]doma
 			&v.Location, &v.Line, &v.CVE, &v.CVSS, &v.Remediation,
 			&refsJSON, &v.DetectedAt,
 		); err != nil {
-			return nil, fmt.Errorf("postgres: scan vulnerability row: %w", err)
+			return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: scan vulnerability row")
 		}
 		json.Unmarshal(refsJSON, &v.References)
 		vulns = append(vulns, v)
@@ -277,7 +278,7 @@ func (a *Adapter) GetVulnerabilityByID(ctx context.Context, vulnID string) (*dom
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("postgres: scan vulnerability: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: scan vulnerability")
 	}
 	json.Unmarshal(refsJSON, &v.References)
 
@@ -290,7 +291,7 @@ func (a *Adapter) CountBySeverity(ctx context.Context, scanID string) (map[domai
 		`SELECT severity, COUNT(*) FROM vulnerabilities WHERE scan_id = $1 GROUP BY severity`, scanID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: count by severity: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: count by severity")
 	}
 	defer rows.Close()
 
@@ -299,7 +300,7 @@ func (a *Adapter) CountBySeverity(ctx context.Context, scanID string) (map[domai
 		var sev domain.Severity
 		var count int
 		if err := rows.Scan(&sev, &count); err != nil {
-			return nil, fmt.Errorf("postgres: scan severity count: %w", err)
+			return nil, types.Wrap(err, types.ErrCodeInternal, "postgres: scan severity count")
 		}
 		counts[sev] = count
 	}
@@ -313,12 +314,12 @@ func (a *Adapter) UpdateScanStatus(ctx context.Context, scanID string, status do
 		`UPDATE scan_results SET status = $1 WHERE scan_id = $2`, status, scanID,
 	)
 	if err != nil {
-		return fmt.Errorf("postgres: update scan status: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "postgres: update scan status")
 	}
 
 	rowsAffected, _ := res.RowsAffected()
 	if rowsAffected == 0 {
-		return fmt.Errorf("postgres: scan %s not found", scanID)
+		return types.Newf(types.ErrCodeNotFound, "postgres: scan %s not found", scanID)
 	}
 
 	return nil

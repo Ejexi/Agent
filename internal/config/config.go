@@ -1,7 +1,7 @@
 package config
 
 import (
-	"duckops/internal/types"
+	"github.com/SecDuckOps/Shared/types"
 	"fmt"
 	"log"
 	"os"

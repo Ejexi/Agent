@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
-	"duckops/internal/ports"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	"github.com/SecDuckOps/Shared/types"
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
@@ -43,18 +43,18 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 
 	client, err := elasticsearch.NewClient(esCfg)
 	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: failed to create client: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "elasticsearch: failed to create client")
 	}
 
 	// Verify connectivity
 	res, err := client.Info()
 	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: failed to connect: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "elasticsearch: failed to connect")
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch: server error: %s", res.String())
+		return nil, types.Newf(types.ErrCodeInternal, "elasticsearch: server error: %s", res.String())
 	}
 
 	return &Adapter{
@@ -76,7 +76,7 @@ func (a *Adapter) StoreLogs(ctx context.Context, scanID string, logs []string) e
 
 		body, err := json.Marshal(entry)
 		if err != nil {
-			return fmt.Errorf("elasticsearch: marshal log entry: %w", err)
+			return types.Wrap(err, types.ErrCodeInternal, "elasticsearch: marshal log entry")
 		}
 
 		req := esapi.IndexRequest{
@@ -87,12 +87,12 @@ func (a *Adapter) StoreLogs(ctx context.Context, scanID string, logs []string) e
 
 		res, err := req.Do(ctx, a.client)
 		if err != nil {
-			return fmt.Errorf("elasticsearch: index log entry: %w", err)
+			return types.Wrap(err, types.ErrCodeInternal, "elasticsearch: index log entry")
 		}
 		defer res.Body.Close()
 
 		if res.IsError() {
-			return fmt.Errorf("elasticsearch: index error: %s", res.String())
+			return types.Newf(types.ErrCodeInternal, "elasticsearch: index error: %s", res.String())
 		}
 	}
 
@@ -196,7 +196,7 @@ func (a *Adapter) DeleteLogs(ctx context.Context, scanID string) error {
 
 	body, err := json.Marshal(query)
 	if err != nil {
-		return fmt.Errorf("elasticsearch: marshal delete query: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "elasticsearch: marshal delete query")
 	}
 
 	req := esapi.DeleteByQueryRequest{
@@ -206,12 +206,12 @@ func (a *Adapter) DeleteLogs(ctx context.Context, scanID string) error {
 
 	res, err := req.Do(ctx, a.client)
 	if err != nil {
-		return fmt.Errorf("elasticsearch: delete by query: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "elasticsearch: delete by query")
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		return fmt.Errorf("elasticsearch: delete error: %s", res.String())
+		return types.Newf(types.ErrCodeInternal, "elasticsearch: delete error: %s", res.String())
 	}
 
 	return nil
@@ -226,7 +226,7 @@ func (a *Adapter) Close() error {
 func (a *Adapter) executeSearch(ctx context.Context, query map[string]interface{}) ([]ports.LogEntry, error) {
 	body, err := json.Marshal(query)
 	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: marshal query: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "elasticsearch: marshal query")
 	}
 
 	res, err := a.client.Search(
@@ -235,12 +235,12 @@ func (a *Adapter) executeSearch(ctx context.Context, query map[string]interface{
 		a.client.Search.WithBody(bytes.NewReader(body)),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: search: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "elasticsearch: search")
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch: search error: %s", res.String())
+		return nil, types.Newf(types.ErrCodeInternal, "elasticsearch: search error: %s", res.String())
 	}
 
 	var esResp struct {
@@ -252,7 +252,7 @@ func (a *Adapter) executeSearch(ctx context.Context, query map[string]interface{
 	}
 
 	if err := json.NewDecoder(res.Body).Decode(&esResp); err != nil {
-		return nil, fmt.Errorf("elasticsearch: decode response: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "elasticsearch: decode response")
 	}
 
 	entries := make([]ports.LogEntry, 0, len(esResp.Hits.Hits))

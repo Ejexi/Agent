@@ -2,11 +2,13 @@ package rabbitmq
 
 import (
 	"context"
-	"duckops/internal/domain"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
+
+	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/Shared/types"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -47,13 +49,13 @@ func (c Config) DSN() string {
 func NewAdapter(cfg Config) (*Adapter, error) {
 	conn, err := amqp.Dial(cfg.DSN())
 	if err != nil {
-		return nil, fmt.Errorf("rabbitmq: failed to connect: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "rabbitmq: failed to connect")
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("rabbitmq: failed to open channel: %w", err)
+		return nil, types.Wrap(err, types.ErrCodeInternal, "rabbitmq: failed to open channel")
 	}
 
 	return &Adapter{
@@ -62,42 +64,35 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 	}, nil
 }
 
-// Publish serializes a domain.Result to JSON and sends it to the specified topic.
-// Serialization is the adapter's responsibility — the kernel never touches wire formats.
-func (a *Adapter) Publish(ctx context.Context, topic string, result domain.Result) error {
+// PublishEvent serializes any event to JSON and sends it.
+func (a *Adapter) PublishEvent(ctx context.Context, topic string, event interface{}) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Adapter handles serialization
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("rabbitmq: failed to marshal result: %w", err)
+		return types.Wrap(err, types.ErrCodeInternal, "rabbitmq: failed to marshal event")
 	}
 
-	// Ensure the queue exists (idempotent)
 	_, err = a.channel.QueueDeclare(
-		topic, // queue name
-		true,  // durable
-		false, // auto-delete
-		false, // exclusive
-		false, // no-wait
-		nil,   // arguments
+		topic, true, false, false, false, nil,
 	)
 	if err != nil {
-		return fmt.Errorf("rabbitmq: failed to declare queue %q: %w", topic, err)
+		return types.Wrapf(err, types.ErrCodeInternal, "rabbitmq: failed to declare queue %q", topic)
 	}
 
 	return a.channel.PublishWithContext(ctx,
-		"",    // exchange (default direct exchange)
-		topic, // routing key = queue name
-		false, // mandatory
-		false, // immediate
+		"", topic, false, false,
 		amqp.Publishing{
 			ContentType:  "application/json",
 			DeliveryMode: amqp.Persistent,
 			Body:         data,
 		},
 	)
+}
+
+func (a *Adapter) Publish(ctx context.Context, topic string, result domain.Result) error {
+	return a.PublishEvent(ctx, topic, result)
 }
 
 // Subscribe registers a handler that is invoked for each message on the given topic.
@@ -116,7 +111,7 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 		nil,   // arguments
 	)
 	if err != nil {
-		return fmt.Errorf("rabbitmq: failed to declare queue %q: %w", topic, err)
+		return types.Wrapf(err, types.ErrCodeInternal, "rabbitmq: failed to declare queue %q", topic)
 	}
 
 	msgs, err := a.channel.Consume(
@@ -129,7 +124,7 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 		nil,   // arguments
 	)
 	if err != nil {
-		return fmt.Errorf("rabbitmq: failed to start consumer on %q: %w", topic, err)
+		return types.Wrapf(err, types.ErrCodeInternal, "rabbitmq: failed to start consumer on %q", topic)
 	}
 
 	// Dispatch incoming messages in a background goroutine
@@ -174,17 +169,17 @@ func (a *Adapter) Close() error {
 	var errs []error
 	if a.channel != nil {
 		if err := a.channel.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("rabbitmq: channel close: %w", err))
+			errs = append(errs, types.Wrap(err, types.ErrCodeInternal, "rabbitmq: channel close"))
 		}
 	}
 	if a.conn != nil {
 		if err := a.conn.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("rabbitmq: connection close: %w", err))
+			errs = append(errs, types.Wrap(err, types.ErrCodeInternal, "rabbitmq: connection close"))
 		}
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("rabbitmq: close errors: %v", errs)
+		return types.Newf(types.ErrCodeInternal, "rabbitmq: close errors: %v", errs)
 	}
 	return nil
 }

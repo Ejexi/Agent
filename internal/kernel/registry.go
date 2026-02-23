@@ -1,8 +1,8 @@
 package kernel
 
 import (
-	"duckops/internal/tools/base"
-	types "duckops/internal/types"
+	"github.com/SecDuckOps/Agent/internal/tools/base"
+	types "github.com/SecDuckOps/Shared/types"
 	"sync"
 )
 

@@ -2,7 +2,7 @@ package ports
 
 import (
 	"context"
-	"duckops/internal/domain"
+	"github.com/SecDuckOps/Agent/internal/domain"
 )
 
 // MetadataDB defines the interface for the vulnerability metadata store (PostgreSQL).

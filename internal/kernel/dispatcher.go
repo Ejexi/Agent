@@ -2,10 +2,12 @@ package kernel
 
 import (
 	"context"
-	"duckops/internal/domain"
-	"duckops/internal/ports"
-	types "duckops/internal/types"
 	"log"
+
+	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/Agent/internal/ports"
+	types "github.com/SecDuckOps/Shared/types"
+	shared "github.com/SecDuckOps/Shared"
 )
 
 // Dispatcher processes incoming tasks from the message bus.
@@ -35,9 +37,14 @@ func (d *Dispatcher) Start(ctx context.Context, topic string) error {
 			log.Printf("Task execution failed: %v", err)
 		}
 
-		// The bus adapter handles serialization — we pass a clean domain.Result
+		// Ensure the Task ID is part of the result for correlation on the server
+		if result.Data == nil {
+			result.Data = make(map[string]interface{})
+		}
+		result.Data["scan_id"] = task.ID
+
 		if d.bus != nil {
-			pubErr := d.bus.Publish(ctx, "tasks.results", result)
+			pubErr := d.bus.Publish(ctx, shared.QueueTaskResults, result)
 			if pubErr != nil {
 				log.Printf("Failed to publish result: %v",
 					types.Wrap(pubErr, types.ErrCodeInternal, "failed to publish task results"))
