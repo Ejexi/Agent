@@ -2,7 +2,7 @@ package base
 
 import (
 	"context"
-	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/domain"
 	"encoding/json"
 	"fmt"
 )

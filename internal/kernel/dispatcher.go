@@ -4,10 +4,10 @@ import (
 	"context"
 	"log"
 
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/ports"
-	types "github.com/SecDuckOps/Shared/types"
-	shared "github.com/SecDuckOps/Shared"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/shared/protocol"
+	types "github.com/SecDuckOps/shared/types"
 )
 
 // Dispatcher processes incoming tasks from the message bus.
@@ -44,7 +44,7 @@ func (d *Dispatcher) Start(ctx context.Context, topic string) error {
 		result.Data["scan_id"] = task.ID
 
 		if d.bus != nil {
-			pubErr := d.bus.Publish(ctx, shared.QueueTaskResults, result)
+			pubErr := d.bus.Publish(ctx, protocol.QueueTaskResults, result)
 			if pubErr != nil {
 				log.Printf("Failed to publish result: %v",
 					types.Wrap(pubErr, types.ErrCodeInternal, "failed to publish task results"))

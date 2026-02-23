@@ -1,9 +1,9 @@
-module github.com/SecDuckOps/Agent
+module github.com/SecDuckOps/agent
 
 go 1.24.0
 
 require (
-	github.com/SecDuckOps/Shared v0.0.0-00010101000000-000000000000
+	github.com/SecDuckOps/shared v1.0.0
 	github.com/elastic/go-elasticsearch/v8 v8.19.3
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
@@ -60,4 +60,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/SecDuckOps/Shared => ../shared
+replace github.com/SecDuckOps/shared => ../shared

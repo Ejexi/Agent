@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/SecDuckOps/Agent/internal/adapters/cli"
-	"github.com/SecDuckOps/Agent/internal/adapters/setup"
-	"github.com/SecDuckOps/Agent/internal/config"
-	"github.com/SecDuckOps/Agent/internal/kernel"
-	"github.com/SecDuckOps/Agent/internal/tools/implementations/chat"
-	"github.com/SecDuckOps/Agent/internal/tools/implementations/echo"
-	"github.com/SecDuckOps/Agent/internal/tools/implementations/scan"
+	"github.com/SecDuckOps/agent/internal/adapters/cli"
+	"github.com/SecDuckOps/agent/internal/adapters/setup"
+	"github.com/SecDuckOps/agent/internal/config"
+	"github.com/SecDuckOps/agent/internal/kernel"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/chat"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/echo"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/scan"
 
-	"github.com/SecDuckOps/Shared/llm/application"
-	"github.com/SecDuckOps/Shared/llm/domain"
-	"github.com/SecDuckOps/Shared/llm/infrastructure"
+	"github.com/SecDuckOps/shared/llm/application"
+	"github.com/SecDuckOps/shared/llm/domain"
+	"github.com/SecDuckOps/shared/llm/infrastructure"
 )
 
 // InitApp orchestrates the Dependency Injection, configuration, and setup process

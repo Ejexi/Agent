@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/ports"
-	"github.com/SecDuckOps/Shared/types"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/shared/types"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 )

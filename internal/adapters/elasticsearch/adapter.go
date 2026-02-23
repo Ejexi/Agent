@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/SecDuckOps/Agent/internal/ports"
-	"github.com/SecDuckOps/Shared/types"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/shared/types"
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"

@@ -3,11 +3,11 @@ package chat
 import (
 	"context"
 
-	"github.com/SecDuckOps/Shared/llm/domain"
+	"github.com/SecDuckOps/shared/llm/domain"
 
-	agent_domain "github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/tools/base"
-	"github.com/SecDuckOps/Shared/types"
+	agent_domain "github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/tools/base"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // ChatParams defines the parameters for the chat tool.

@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/SecDuckOps/Agent/internal/adapters/rabbitmq"
-	"github.com/SecDuckOps/Agent/internal/kernel"
-	shared "github.com/SecDuckOps/Shared"
+	"github.com/SecDuckOps/agent/internal/adapters/rabbitmq"
+	"github.com/SecDuckOps/agent/internal/kernel"
+	"github.com/SecDuckOps/shared/protocol"
 )
 
 // RunWorkerMode starts the agent as a background worker processing tasks.
@@ -36,7 +36,7 @@ func RunWorkerMode(k *kernel.Kernel, workerType string) {
 	// 3. Start Dispatcher via Kernel
 	k.SetMessageBus(busAdapter)
 
-	topic := shared.QueueAgentTasks
+	topic := protocol.QueueAgentTasks
 	log.Printf("Worker mode [%s] subscribing to core topic: %s", workerType, topic)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/SecDuckOps/Shared/types"
+	"github.com/SecDuckOps/shared/types"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )

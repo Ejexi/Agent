@@ -1,11 +1,12 @@
 package setup
 
 import (
-	"github.com/SecDuckOps/Agent/internal/config"
-	"github.com/SecDuckOps/Shared/types"
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/SecDuckOps/agent/internal/config"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // FileSetupRepository implements SetupRepository for a JSON file on disk.

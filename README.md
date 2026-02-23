@@ -83,19 +83,19 @@ When `kernel.Execute(task)` is called:
 
 ### **Dependency: Shared Foundation**
 
-This repository depends on **[DuckOps Shared](https://github.com/SecDuckOps/Shared)**.
+This repository depends on **[DuckOps Shared](https://github.com/SecDuckOps/shared)**.
 It provides the shared `AppError` system, LLM ports, and event types used to communicate with the server.
 
 For local development:
 
 ```bash
 # Example go.mod replace
-replace github.com/SecDuckOps/Shared => ../shared
+replace github.com/SecDuckOps/shared => ../shared
 ```
 
 ### **Interaction: DuckOps Server**
 
-The Agent is a worker that interacts with the **[Server](https://github.com/SecDuckOps/Server)** asynchronously via RabbitMQ.
+The Agent is a worker that interacts with the **[Server](https://github.com/SecDuckOps/server)** asynchronously via RabbitMQ.
 It is essentially a "Remote Procedure Call" target for the Server's Orchestrator. It remains completely unaware of the Server's persistence or state machine.
 
 ---

@@ -1,6 +1,6 @@
 package ports
 
-import "github.com/SecDuckOps/Agent/internal/config"
+import "github.com/SecDuckOps/agent/internal/config"
 
 // SetupRepository handles the persistence of the agent configuration.
 type SetupRepository interface {

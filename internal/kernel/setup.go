@@ -2,12 +2,13 @@ package kernel
 
 import (
 	"bufio"
-	"github.com/SecDuckOps/Agent/internal/config"
-	"github.com/SecDuckOps/Agent/internal/ports"
-	"github.com/SecDuckOps/Shared/types"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/SecDuckOps/agent/internal/config"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // SetupService handles the first-run configuration logic for the Agent.

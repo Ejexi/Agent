@@ -8,11 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SecDuckOps/Agent/internal/adapters/rabbitmq"
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/kernel"
-	shared "github.com/SecDuckOps/Shared"
-	"github.com/SecDuckOps/Shared/events"
+	"github.com/SecDuckOps/agent/internal/adapters/rabbitmq"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/kernel"
+	"github.com/SecDuckOps/shared/protocol"
 )
 
 // RunInteractiveMode starts the terminal REPL loop for the DevSecOps agent.
@@ -85,14 +84,14 @@ func RunInteractiveMode(k *kernel.Kernel, selectedProvider string, mode string) 
 				k.SetMessageBus(bus)
 			}
 
-			event := events.RawInputReceived{
+			event := protocol.RawInputReceived{
 				ID:        fmt.Sprintf("raw-%d", time.Now().UnixNano()),
 				Text:      input,
 				Source:    "cli",
 				Timestamp: time.Now(),
 			}
 
-			err := k.Deps.MessageBus.PublishEvent(context.Background(), shared.QueueRawInput, event)
+			err := k.Deps.MessageBus.PublishEvent(context.Background(), protocol.QueueRawInput, event)
 			if err != nil {
 				fmt.Printf("[Cloud Error] Failed to send to server: %v\n", err)
 			} else {

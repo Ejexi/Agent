@@ -7,8 +7,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Shared/types"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/shared/types"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )

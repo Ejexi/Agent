@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/SecDuckOps/Shared/llm/domain"
+	"github.com/SecDuckOps/shared/llm/domain"
 
-	agent_domain "github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/ports"
-	"github.com/SecDuckOps/Agent/internal/tools/base"
+	agent_domain "github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/agent/internal/tools/base"
 )
 
 // ScanTool implements the domain.Tool interface.

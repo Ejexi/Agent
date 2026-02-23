@@ -2,8 +2,8 @@ package echo
 
 import (
 	"context"
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/tools/base"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/tools/base"
 )
 
 // EchoParams defines the input for the echo tool.

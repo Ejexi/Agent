@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/tools/echo"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/tools/echo"
 	"github.com/google/uuid"
 )
 

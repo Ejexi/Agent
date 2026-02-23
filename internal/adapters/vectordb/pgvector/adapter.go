@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SecDuckOps/Agent/internal/ports"
-	"github.com/SecDuckOps/Shared/types"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/shared/types"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 	pgv "github.com/pgvector/pgvector-go"

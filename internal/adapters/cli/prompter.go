@@ -2,12 +2,13 @@ package cli
 
 import (
 	"bufio"
-	"github.com/SecDuckOps/Agent/internal/config"
-	"github.com/SecDuckOps/Shared/types"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/SecDuckOps/agent/internal/config"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // SetupPrompter implements the console logic for setup operations.

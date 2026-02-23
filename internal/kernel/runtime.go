@@ -2,9 +2,10 @@ package kernel
 
 import (
 	"context"
-	"github.com/SecDuckOps/Agent/internal/domain"
-	types "github.com/SecDuckOps/Shared/types"
 	"sync"
+
+	"github.com/SecDuckOps/agent/internal/domain"
+	types "github.com/SecDuckOps/shared/types"
 )
 
 // Runtime handles the execution of tools.

@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/SecDuckOps/Agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/domain"
 )
 
 // BusPort defines the interface for the message bus (RabbitMQ, NATS, etc.).

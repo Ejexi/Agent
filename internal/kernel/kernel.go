@@ -3,11 +3,11 @@ package kernel
 import (
 	"context"
 
-	"github.com/SecDuckOps/Agent/internal/domain"
-	"github.com/SecDuckOps/Agent/internal/ports"
-	"github.com/SecDuckOps/Agent/internal/tools/base"
-	types "github.com/SecDuckOps/Shared/types"
-	shared_domain "github.com/SecDuckOps/Shared/llm/domain"
+	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/agent/internal/tools/base"
+	shared_domain "github.com/SecDuckOps/shared/llm/domain"
+	types "github.com/SecDuckOps/shared/types"
 )
 
 // Dependencies holds all external ports needed by the kernel.

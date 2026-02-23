@@ -1,9 +1,10 @@
 package kernel
 
 import (
-	"github.com/SecDuckOps/Agent/internal/tools/base"
-	types "github.com/SecDuckOps/Shared/types"
 	"sync"
+
+	"github.com/SecDuckOps/agent/internal/tools/base"
+	types "github.com/SecDuckOps/shared/types"
 )
 
 // Registry manages the available tools.
