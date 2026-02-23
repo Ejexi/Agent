@@ -1,10 +1,10 @@
 package kernel
 
 import (
+	"context"
 	"duckops/internal/domain"
 	"duckops/internal/ports"
 	types "duckops/internal/types"
-	"context"
 	"log"
 )
 
@@ -28,18 +28,19 @@ func (d *Dispatcher) Start(ctx context.Context, topic string) error {
 		return types.New(types.ErrCodeInternal, "message bus is not configured for dispatcher")
 	}
 
+	// The bus adapter handles deserialization — we receive a clean domain.Task
 	err := d.bus.Subscribe(ctx, topic, func(task domain.Task) {
 		result, err := d.runtime.Execute(ctx, task)
 		if err != nil {
-			// Structured error log
 			log.Printf("Task execution failed: %v", err)
 		}
 
-		// Publish result back to the message bus
+		// The bus adapter handles serialization — we pass a clean domain.Result
 		if d.bus != nil {
 			pubErr := d.bus.Publish(ctx, "tasks.results", result)
 			if pubErr != nil {
-				log.Printf("Failed to publish result: %v", types.Wrap(pubErr, types.ErrCodeInternal, "failed to publish task results"))
+				log.Printf("Failed to publish result: %v",
+					types.Wrap(pubErr, types.ErrCodeInternal, "failed to publish task results"))
 			}
 		}
 	})

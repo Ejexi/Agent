@@ -58,6 +58,14 @@ func (k *Kernel) StartDispatcher(ctx context.Context, topic string) error {
 	return k.dispatcher.Start(ctx, topic)
 }
 
+// SetMessageBus allows late-binding of the message bus adapter to the kernel.
+func (k *Kernel) SetMessageBus(bus ports.BusPort) {
+	k.Deps.MessageBus = bus
+	if k.dispatcher != nil {
+		k.dispatcher.bus = bus
+	}
+}
+
 // Execute provides a direct way to execute a tool, mainly used by CLI.
 // Notice: Kernel is the only component allowed to execute tools.
 func (k *Kernel) Execute(ctx context.Context, task domain.Task) (domain.Result, error) {
