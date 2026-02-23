@@ -1,255 +1,90 @@
-# DevSecOps Agent - Developer Guide
+# DuckOps Agent: The Autonomous Execution Engine
 
-Welcome to the **DevSecOps Agent Engine** developer guide.
-This core engine is carefully designed using **Hexagonal Architecture** (Ports and Adapters) combined with an **Event-Driven Architecture**.
-
-The primary goals of this architecture are:
-
-1. **Kernel Isolation:** The Core Kernel is completely agnostic to the outside world (like Databases, message brokers, or external APIs).
-2. **Tool Isolation:** Tools do not have the authority to execute themselves, nor do they communicate directly with infrastructure. Instead, they use injected `Ports`.
-3. **Ultimate Flexibility:** The Core Engine can be embedded into any service (e.g., CLI, RabbitMQ Worker, RESTful API Server) without changing a single line of internal code.
+The DuckOps Agent is a high-performance, stateless worker engine designed to execute security tasks in isolated environments. It is built using a strict **Kernel-Policy Architecture**.
 
 ---
 
-## Architecture Layers
+## 🧠 1. Internal Engine Components
 
-The project is divided into the following strict layers based on our internal rules:
+The Agent is NOT just a CLI; it's an engine with three core internal components:
 
-- `internal/domain/`: Contains the core entities of the system (`Task`, `Result`, `Tool`). This is the universal language of the Engine; it has zero external dependencies. **(domain → no dependencies)**
-- `internal/ports/`: The Interfaces requested by the Engine to communicate with the outside world (e.g., `MessageBus`, `Memory`, `LLM`). **(ports → domain only)**
-- `internal/kernel/`: The mastermind and the **sole authority for execution**. It houses the `Registry` (for storing tools), `Runtime` (the execution environment), and `Dispatcher` (task router). **(kernel → domain only)**
-- `internal/Types/`: Contains our robust, structured error system (`AppError`) with traceable error codes.
-- `internal/tools/`: The actual DevSecOps tools (e.g., `scan_tool`). These tools are instantiated by injecting specific `Ports` as dependencies. **(tools → ports + domain)**
-- `internal/adapters/`: The concrete implementations that connect the outside world to the system (e.g., actual RabbitMQ code that implements the `ports.BusPort` interface). **(adapters → ports only)**
-- `internal/config/`: Configuration management module utilizing Viper to read `config.yaml` and OS-level Environment Variables via 12-factor methodology.
-- `cmd/agent-cli/`: The application entrypoints. This is where we wire up all the pieces (Adapters + Tools + Kernel) to start a specific service. We intentionally split this into `main.go`, `app.go` (for DI and setup), and `repl.go` (for the interactive loop) to maintain Single Responsibility. **(cmd → kernel only)**
+### **The Registry** (`/kernel/registry.go`)
 
-** Forbidden Operations (Golden Rules):**
+- The "Library of Capabilities".
+- It stores maps of `domain.Tool` implementations.
+- Every tool must register its name and instance here during the `bootstrap` phase.
 
-- `domain` or `kernel` must **never** depend on `adapters` or `config`.
-- `tools` must **never** access infrastructure, configurations, or adapters directly.
-- `tool.Run()` should NEVER be called directly. Always route execution through the Kernel: `kernel.Execute(task)`.
+### **The Runtime** (`/kernel/runtime.go`)
+
+- The "Safety Wrapper".
+- Responsible for the actual execution of `tool.Run()`.
+- Built-in **Panic Recovery**: It catches tool panics and converts them into structured `AppError` objects.
+- **Metrics & Logging**: It transparently logs tool execution time and status without modifying the tool code.
+
+### **The Dispatcher** (`/kernel/dispatcher.go`)
+
+- The "Task Router".
+- Used in `cloud` mode to poll the **MessageBus Port** (RabbitMQ).
+- It unmarshals incoming tasks and hands them to the Kernel for execution.
 
 ---
 
-## How to Add a New Tool
+## 🛠️ 2. Detailed Tool Development Guide
 
-Every tool must be **stateless**, deterministic, and implement the `domain.Tool` interface:
+Every tool must implement the `domain.Tool` interface.
+
+### **Golden Rules for Tools**
+
+1.  **Must be Stateless**: Tools should never store data across executions.
+2.  **No direct I/O**: Use injected `Ports` (Filesystem, LLM, Memory) for all external interactions.
+3.  **AppError Enforcement**: Never return raw errors. Use `types.New` or `types.Wrap`.
+
+### **Implementation Example**
 
 ```go
-type Tool interface {
-	Name() string
-	Run(ctx context.Context, task Task) (Result, error)
+type SecurityScanner struct {
+    llm ports.LLM // Injected Port
+}
+
+func (s *SecurityScanner) Run(ctx context.Context, task domain.Task) (domain.Result, error) {
+    // 1. Parameter extraction
+    target, ok := task.Args["target"].(string)
+    if !ok {
+        return domain.Result{}, types.New(types.ErrCodeInvalidInput, "missing target path")
+    }
+
+    // 2. Business Logic using Ports
+    finding, err := s.llm.Generate(ctx, "Scan this: " + target)
+    if err != nil {
+        return domain.Result{}, types.Wrap(err, types.ErrCodeToolFailed, "llm analysis failed")
+    }
+
+    // 3. Structured Result return
+    return domain.Result{Success: true, Data: finding}, nil
 }
 ```
 
-### Step-by-Step Practical Guide:
+---
 
-1. **Create the Tool Directory:** `internal/tools/{tool_name}/`
-2. **Define the Struct and Request Ports:**
-   Determine which Ports your tool needs (e.g., Memory and LLM). Never use infrastructure packages (like `database/sql` or `net/http`) directly inside the tool.
+## 🔄 3. Granular Execution Lifecycle
 
-   ```go
-   package sast
+When `kernel.Execute(task)` is called:
 
-   import (
-   	"agent/internal/Types"
-   	"agent/internal/domain"
-   	"agent/internal/ports"
-   	"context"
-   )
-
-   type SastTool struct {
-   	llm ports.LLMRegistry // The injected Port
-   }
-
-   func NewSastTool(llm ports.LLMRegistry) *SastTool {
-   	return &SastTool{llm: llm} // Dependency Injection
-   }
-
-   func (t *SastTool) Name() string { return "sast" }
-   ```
-
-3. **Implement the Business Logic (`Run()`) and return a `domain.Result`:**
-   - Extract inputs from `task.Args`.
-   - Handle errors using `types.New()` or `types.Wrap()`.
-   - Use the injected Ports when needed (e.g., `t.llm.Get("openai").Generate()`).
-
-   ```go
-   func (t *SastTool) Run(ctx context.Context, task domain.Task) (domain.Result, error) {
-   	target, ok := task.Args["target"].(string)
-   	if !ok {
-   		// Utilizing our Structured Errors
-   		return domain.Result{}, types.New(types.ErrCodeInvalidInput, "missing target")
-   	}
-
-   	// Business Logic (No infrastructure logic allowed)
-   	return domain.Result{
-   		TaskID:  task.ID,
-   		Success: true,
-   		Status:  "done",
-   		Data:    map[string]interface{}{"found": true},
-   	}, nil
-   }
-   ```
-
-4. **Register the Tool in the Entrypoint:**
-   In your service entrypoint (e.g., `cmd/agent-cli/app.go`), instantiate the tool with its required Ports, then register it to the Kernel:
-   ```go
-   sastTool := sast.NewSastTool(deps.LLM)
-   k.RegisterTool(sastTool)
-   ```
+1.  **Lookup**: Kernel asks the **Registry** for the tool matching `task.ToolName`.
+2.  **Wrappers**: Runtime wraps the execution with a `defer recover()` block.
+3.  **Injection**: Context (with Correlation ID) is passed down to the tool.
+4.  **Execution**: `tool.Run()` is called.
+5.  **Post-Processing**: Runtime captures the `Result`, logs the performance metadata, and flushes traces.
+6.  **Return**: The clean `domain.Result` is returned to the original caller (CLI or Bus Adapter).
 
 ---
 
-## How to Add a New Adapter
+## 🔗 How it Links to DuckOps Ecosystem
 
-Adapters connect the system to the external world. **Adapters must contain NO business logic or decision making.**
-An Adapter always implements an Interface defined in the `internal/ports/` directory.
-
-### Example: Creating a RabbitMQ Adapter
-
-Suppose you want the Engine to listen to RabbitMQ.
-The Architecture prohibits the Kernel from knowing what RabbitMQ is. The Kernel only understands `ports.BusPort`.
-
-1. **Create the Adapter Directory:** `internal/adapters/rabbitmq/`
-2. **Implement the Port:**
-   Create code that imports the `amqp` package, and build a Struct that matches the `BusPort` interface methods.
-
-   ```go
-   package rabbitmq
-
-   import (
-   	"agent/internal/domain"
-   	"context"
-   	"fmt"
-   	// import "github.com/streadway/amqp" (for example)
-   )
-
-   type RabbitMQAdapter struct {
-   	// conn *amqp.Connection
-   }
-
-   func NewRabbitMQAdapter(url string) *RabbitMQAdapter {
-   	// Initialize the real connection here
-   	return &RabbitMQAdapter{}
-   }
-
-   // Fulfilling the Publish Interface
-   func (r *RabbitMQAdapter) Publish(ctx context.Context, topic string, message interface{}) error {
-   	fmt.Println("Publishing via RabbitMQ to", topic)
-   	return nil
-   }
-
-   // Fulfilling the Subscribe Interface and transforming messages to domain.Task
-   func (r *RabbitMQAdapter) Subscribe(ctx context.Context, topic string, handler func(domain.Task)) error {
-   	// 1. Listen to the Queue via amqp
-   	// 2. Unmarshal the JSON into a domain.Task object
-   	// 3. Execute the provided handler
-   	// handler(task)
-   	return nil
-   }
-   ```
-
-3. **Inject the Adapter into the Kernel (Dependency Injection):**
-   Now, in your service entrypoint (e.g., your Rabbit Worker service):
-
-   ```go
-   rabbitBus := rabbitmq.NewRabbitMQAdapter("amqp://localhost")
-
-   deps := kernel.Dependencies{
-   	MessageBus: rabbitBus, // The Kernel accepts this via Polymorphism
-   }
-
-   k := kernel.New(deps)
-   ```
-
-This pattern applies to everything:
-
-- `OpenRouterAdapter` implements `ports.LLM`.
-- `PostgresAdapter` implements `ports.MemoryPort`.
+- **Shared (`shared/types`)**: The Agent uses the global error system to ensure that if a tool fails on a remote machine, the Server receives a machine-readable failure code.
+- **Shared (`shared/llm`)**: Intelligent tools (like AI-SAST) use the shared LLM registry for consistent behavior.
+- **Server**: The Agent is essentially a "Remote Procedure Call" target for the Server's Orchestrator. It remains completely unaware of the Server's persistence or state machine.
 
 ---
 
-## ⚙️ Configuration Management (12-Factor App)
-
-The application configures itself using a hybrid YAML + Environment Variable approach managed by **Viper**.
-
-- Base configurations (like models and base URLs) reside in `config.yaml`.
-- Secrets (like API keys) MUST be injected via Environment Variables.
-
-Note: Our configuration module uses `os.ExpandEnv` combined with Viper, so you can safely inject variables directly inside `config.yaml` using the `$(VAR)` or `${VAR}` syntax.
-
-#### Example `config.yaml`:
-
-```yaml
-env: "development"
-llm:
-  openai:
-    api_key: "$(OPENAI_API_KEY)"
-    model: "gpt-4"
-  openrouter:
-    api_key: "$(OPENROUTER_API_KEY)"
-    model: "arcee-ai/trinity-large-preview:free"
-  lmstudio:
-    api_key: "not-needed"
-    model: "local-model"
-    base_url: "http://localhost:1234/v1"
-```
-
-#### Running the Agent (from the terminal):
-
-```bash
-# Windows (PowerShell)
-$env:OPENROUTER_API_KEY="sk-or-v1-..."
-go run ./cmd/agent-cli
-
-# Linux / Mac
-export OPENROUTER_API_KEY="sk-or-v1-..."
-go run ./cmd/agent-cli
-```
-
----
-
-## Error Handling Guide
-
-Do not return generic errors (like `fmt.Errorf()`) to upper layers in this project.
-Always use the robust, structured error system located in `internal/Types/error.go`. It protects the underlying cause and only serializes to the client what you intend:
-
-- **Creating a new error:**
-  ```go
-  err := types.New(types.ErrCodeInvalidInput, "this input is invalid")
-  ```
-- **Creating a formatted error:**
-  ```go
-  err := types.Newf(types.ErrCodeToolNotFound, "Tool %s not found in registry", toolName)
-  ```
-- **Wrapping an error from an external library and adding Context for tracing:**
-  ```go
-  dbErr := db.Save()
-  if dbErr != nil {
-      return types.Wrap(dbErr, types.ErrCodeInternal, "failed to save to database").WithContext("query", "INSERT...")
-  }
-  ```
-
----
-
-## Execution Flow Summary
-
-A reminder of how the flow works (whether it's CLI, REST, or RabbitMQ):
-
-**Execution Flow (Golden Rule Enforcement):**
-`CLI → Kernel → Runtime → Tool → Message Bus → Worker → Result`
-
-1. The outside world sends a request.
-2. The **Adapter / Entrypoint** transforms the request into a `domain.Task`.
-3. The **Entrypoint** submits the `Task` to `kernel.Execute()` (or `kernel.StartDispatcher()`).
-4. The **Kernel** pushes the `Task` into the **Runtime**.
-5. The **Runtime** fetches the `Tool` from the **Registry** using the tool's name (`Task.Tool`).
-6. The **Runtime** encapsulates the execution and calls `tool.Run(ctx, task)`.
-7. The **Tool** performs its job, utilizing any injected **Ports** for communication or storage.
-8. The **Tool** returns a clean `domain.Result` that has zero infrastructure dependencies.
-9. The **Runtime** catches the result (and intercepts any `Types.AppError` gracefully), returning it to the **Kernel**.
-10. The **Kernel** returns it to the **Adapter**, which then handles dispatching it outward (e.g., as an HTTP JSON Response or an AMQP message).
-
-This architecture guarantees resilience and flexibility. Every single piece is decoupled, easily testable via mocks, and fully isolated. Happy coding!
+_DuckOps Agent: Secure, Isolated, Autonomous._
