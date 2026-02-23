@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/SecDuckOps/Shared v0.0.0-00010101000000-000000000000
 	github.com/elastic/go-elasticsearch/v8 v8.19.3
+	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.11.2
 	github.com/pgvector/pgvector-go v0.3.0
@@ -28,7 +29,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/generative-ai-go v0.20.1 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.11 // indirect
 	github.com/googleapis/gax-go/v2 v2.17.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect

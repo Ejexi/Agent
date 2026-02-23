@@ -23,7 +23,7 @@ func InitApp() (*kernel.Kernel, string) {
 	// =========================================================
 	// 1. Load Configuration
 	// =========================================================
-	cfg, err := config.LoadConfig("config.yaml")
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

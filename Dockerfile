@@ -1,7 +1,7 @@
 # ==========================================
 # Phase 1: Go Builder
 # ==========================================
-FROM golang:1.23.6-alpine3.20 AS builder
+FROM golang:1.24-alpine AS builder
 
 RUN apk --no-cache add ca-certificates tzdata git
 

@@ -1,11 +1,11 @@
-env: development
-
-
-provider: ${ACTIVE_PROVIDER}
-
 # Automatically append .duckops to .gitignore
 auto_append_gitignore: true
 
+
+rabbitmq:
+  url: amqp://agent:password@mq.duckops.com:5672/
+  exchange: duckops
+env: development
 llm:
   openai:
     api_key: ${OPENAI_API_KEY}
@@ -13,11 +13,10 @@ llm:
   
   openrouter:
     api_key: ${OPENROUTER_API_KEY}
-    model: ${OR_MODEL}
+    model: arcee-ai/trinity-large-preview:free
     base_url: "https://openrouter.ai/api/v1"
 
   ollama:
     base_url: ${OLLAMA_URL} # http://localhost:11434/v1
     api_key: "none"
     model: "llama3"
-
