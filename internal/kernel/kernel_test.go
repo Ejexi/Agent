@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/SecDuckOps/agent/internal/domain"
-	"github.com/SecDuckOps/agent/internal/tools/echo"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/echo"
 	"github.com/google/uuid"
 )
 

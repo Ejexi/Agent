@@ -20,7 +20,7 @@ func RunWorkerMode(k *kernel.Kernel, workerType string) {
 	// 1. Get Message Bus Connection String
 	rabbitURL := os.Getenv("RABBITMQ_URL")
 	if rabbitURL == "" {
-		rabbitURL = "amqp://guest:guest@localhost:5672/"
+		log.Fatal("RABBITMQ_URL environment variable is required in worker mode")
 	}
 
 	// 2. Initialize RabbitMQ Adapter

@@ -5,12 +5,14 @@ FROM golang:1.24-alpine AS builder
 
 RUN apk --no-cache add ca-certificates tzdata git
 
-WORKDIR /app
-
-COPY go.mod go.sum ./
+WORKDIR /src
+COPY shared/ ./shared/
+COPY agent/go.mod agent/go.sum ./agent/
+WORKDIR /src/agent
 RUN go mod download
-
-COPY . .
+WORKDIR /src
+COPY agent/ ./agent/
+WORKDIR /src/agent
 RUN go mod tidy
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \

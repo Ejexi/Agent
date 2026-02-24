@@ -3,7 +3,7 @@ module github.com/SecDuckOps/agent
 go 1.24.0
 
 require (
-	github.com/SecDuckOps/shared v1.0.0
+	github.com/SecDuckOps/shared v0.1.0
 	github.com/elastic/go-elasticsearch/v8 v8.19.3
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1

@@ -74,7 +74,8 @@ func RunInteractiveMode(k *kernel.Kernel, selectedProvider string, mode string) 
 			if k.Deps.MessageBus == nil {
 				rabbitURL := os.Getenv("RABBITMQ_URL")
 				if rabbitURL == "" {
-					rabbitURL = "amqp://guest:guest@localhost:5672/"
+					fmt.Println("[Error] RABBITMQ_URL environment variable is required in cloud mode")
+					continue
 				}
 				bus, err := rabbitmq.NewAdapter(rabbitmq.Config{URL: rabbitURL})
 				if err != nil {
