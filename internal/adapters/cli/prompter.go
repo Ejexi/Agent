@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SecDuckOps/agent/internal/config"
+	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/shared/types"
 )
 
@@ -57,7 +57,7 @@ func (p *SetupPrompter) SelectProvider(providers []string) (string, error) {
 	return defaultProvider, nil
 }
 
-func (p *SetupPrompter) PromptCustomProvider() (name string, cfg config.LLMConfig, err error) {
+func (p *SetupPrompter) PromptCustomProvider() (name string, cfg domain.ProviderConfig, err error) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Printf("\n--- Add New Custom LLM Provider ---\n")

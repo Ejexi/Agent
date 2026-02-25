@@ -2,36 +2,42 @@ package scan
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/SecDuckOps/shared/llm/domain"
+	"github.com/SecDuckOps/shared/types"
 
 	agent_domain "github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/tools/base"
 )
 
-// ScanTool implements the domain.Tool interface.
+// ScanParams defines the typed parameters for the scan tool.
+type ScanParams struct {
+	Target     string `json:"target"`
+	AIProvider string `json:"ai_provider"`
+}
+
+// ScanTool performs LLM-powered security scans.
 type ScanTool struct {
-	// The tool requires these ports to function.
-	// It doesn't care if they are implemented by a Mock, CLI, or an actual API.
+	base.BaseTypedTool[ScanParams]
 	llmRegistry domain.LLMRegistry
 	memory      ports.MemoryPort
 }
 
-// ExecuteRaw implements [base.Tool].
-func (t *ScanTool) ExecuteRaw(ctx context.Context, input map[string]interface{}) (agent_domain.Result, error) {
-	// Delegate to Run by creating a virtual task
-	return t.Run(ctx, agent_domain.Task{
-		ID:   "direct_exec_" + t.Name(),
-		Tool: t.Name(),
-		Args: input,
-	})
+// NewScanTool creates a new ScanTool.
+func NewScanTool(llmRegistry domain.LLMRegistry, memory ports.MemoryPort) *ScanTool {
+	t := &ScanTool{
+		llmRegistry: llmRegistry,
+		memory:      memory,
+	}
+	t.Impl = t
+	return t
 }
 
-// Schema implements [base.Tool].
-func (t *ScanTool) Schema() base.ToolSchema {
-	return base.ToolSchema{
+func (t *ScanTool) Name() string { return "scan" }
+
+func (t *ScanTool) Schema() agent_domain.ToolSchema {
+	return agent_domain.ToolSchema{
 		Name:        "scan",
 		Description: "Perform a security scan on a target using LLM analysis and memory storage.",
 		Parameters: map[string]string{
@@ -41,51 +47,33 @@ func (t *ScanTool) Schema() base.ToolSchema {
 	}
 }
 
-// NewScanTool creates a new instance of ScanTool.
-// Notice how we inject the exact Ports this tool needs.
-func NewScanTool(llmRegistry domain.LLMRegistry, memory ports.MemoryPort) *ScanTool {
-	return &ScanTool{
-		llmRegistry: llmRegistry,
-		memory:      memory,
+func (t *ScanTool) ParseParams(input map[string]interface{}) (ScanParams, error) {
+	params, err := base.DefaultParseParams[ScanParams](input)
+	if err != nil {
+		return params, err
 	}
+	if params.Target == "" {
+		return params, types.New(types.ErrCodeInvalidInput, "missing 'target' argument")
+	}
+	if params.AIProvider == "" {
+		params.AIProvider = "openai"
+	}
+	return params, nil
 }
 
-// Name returns the name of the tool.
-func (t *ScanTool) Name() string {
-	return "scan"
-}
-
-// Run executes the scanning process.
-func (t *ScanTool) Run(ctx context.Context, task agent_domain.Task) (agent_domain.Result, error) {
-	// Example flow:
-	// 1- Parse the Target from task args
-	target, ok := task.Args["target"].(string)
-	if !ok {
-		return agent_domain.Result{
-			TaskID:  task.ID,
-			Success: false,
-			Status:  "failed",
-			Error:   "missing target argument",
-		}, nil
-	}
-
-	// 2- Save target to memory (Example usage of MemoryPort)
+func (t *ScanTool) Execute(ctx context.Context, params ScanParams) (agent_domain.Result, error) {
+	// Save target to memory
 	if t.memory != nil {
-		_ = t.memory.Save(ctx, fmt.Sprintf("scan_target_%s", task.ID), target)
+		_ = t.memory.Save(ctx, "scan_target_"+params.Target, params.Target)
 	}
 
-	// 3- Analyze with LLM (Example usage of LLMRegistry)
-	llmReport := "Dummy LLM Report for " + target
+	// Analyze with LLM
+	llmReport := "Dummy LLM Report for " + params.Target
 	if t.llmRegistry != nil {
-		providerName := "openai" // Assume openai is the default
-		if p, ok := task.Args["ai_provider"].(string); ok {
-			providerName = p
-		}
-
-		provider := t.llmRegistry.Get(providerName)
+		provider := t.llmRegistry.Get(params.AIProvider)
 		if provider != nil {
 			report, err := provider.Generate(ctx, []domain.Message{
-				{Role: domain.RoleUser, Content: "Analyze this scan target: " + target},
+				{Role: domain.RoleUser, Content: "Analyze this scan target: " + params.Target},
 			}, nil)
 			if err == nil {
 				llmReport = report
@@ -93,13 +81,11 @@ func (t *ScanTool) Run(ctx context.Context, task agent_domain.Task) (agent_domai
 		}
 	}
 
-	// 4- Return Result
 	return agent_domain.Result{
-		TaskID:  task.ID,
 		Success: true,
 		Status:  "scan completed successfully",
 		Data: map[string]interface{}{
-			"target":     target,
+			"target":     params.Target,
 			"llm_report": llmReport,
 		},
 	}, nil

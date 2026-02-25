@@ -23,8 +23,8 @@ func (t *EchoTool) Name() string {
 	return "echo"
 }
 
-func (t *EchoTool) Schema() base.ToolSchema {
-	return base.ToolSchema{
+func (t *EchoTool) Schema() domain.ToolSchema {
+	return domain.ToolSchema{
 		Name:        "echo",
 		Description: "A simple tool that returns the input as result",
 		Parameters:  nil,

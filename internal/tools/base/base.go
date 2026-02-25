@@ -2,35 +2,16 @@ package base
 
 import (
 	"context"
-	"github.com/SecDuckOps/agent/internal/domain"
 	"encoding/json"
 	"fmt"
+
+	"github.com/SecDuckOps/agent/internal/domain"
 )
 
-// ToolSchema defines the metadata for a tool, used by LLMs for function calling.
-type ToolSchema struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Parameters  map[string]string `json:"parameters"`
-}
-
-// Tool is the basic, LLM-safe interface for all tools.
-type Tool interface {
-	Name() string
-	Schema() ToolSchema
-	ExecuteRaw(ctx context.Context, input map[string]interface{}) (domain.Result, error)
-}
-
-// TypedTool provides a type-safe interface for tool execution.
-type TypedTool[P any] interface {
-	Tool
-	ParseParams(input map[string]interface{}) (P, error)
-	Execute(ctx context.Context, params P) (domain.Result, error)
-}
-
 // BaseTypedTool is a helper struct that implements ExecuteRaw for TypedTools.
+// This is an implementation helper for extensions, not a core interface.
 type BaseTypedTool[P any] struct {
-	Impl TypedTool[P]
+	Impl domain.TypedTool[P]
 }
 
 // ExecuteRaw handles the conversion from map[string]interface{} to the typed parameter P.

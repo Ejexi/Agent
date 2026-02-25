@@ -37,8 +37,8 @@ func (t *ChatTool) Name() string {
 }
 
 // Schema returns the tool schema for LLM function calling.
-func (t *ChatTool) Schema() base.ToolSchema {
-	return base.ToolSchema{
+func (t *ChatTool) Schema() agent_domain.ToolSchema {
+	return agent_domain.ToolSchema{
 		Name:        "chat",
 		Description: "A tool for chatting with various LLM providers.",
 		Parameters: map[string]string{

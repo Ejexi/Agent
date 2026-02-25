@@ -1,18 +1,18 @@
-.PHONY: build test clean run
-
-BINARY_NAME=agent
+.PHONY: build clean test
 
 build:
-	@echo "Building Agent..."
-	go build -o bin/$(BINARY_NAME) ./cmd/agent-cli
-
-test:
-	@echo "Running Agent Tests..."
-	go test -v ./...
+	go build -o duckops.exe ./cmd/duckops
 
 clean:
-	@echo "Cleaning Agent binaries..."
-	rm -rf bin/
+	rm -f duckops.exe
 
-run:
-	go run ./cmd/agent-cli
+test:
+	go test ./...
+
+# Build with version info
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
+
+release:
+	go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o duckops.exe ./cmd/duckops

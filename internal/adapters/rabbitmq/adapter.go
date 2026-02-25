@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/ports"
+	shared_ports "github.com/SecDuckOps/shared/ports"
 	"github.com/SecDuckOps/shared/types"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -19,8 +20,11 @@ import (
 type Adapter struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
+	logger  shared_ports.Logger
 	mu      sync.Mutex
 }
+
+var _ ports.BusPort = (*Adapter)(nil)
 
 // Config holds connection parameters for the RabbitMQ adapter.
 type Config struct {
@@ -46,7 +50,7 @@ func (c Config) DSN() string {
 }
 
 // NewAdapter creates a new RabbitMQ adapter and establishes a connection.
-func NewAdapter(cfg Config) (*Adapter, error) {
+func NewAdapter(cfg Config, logger shared_ports.Logger) (*Adapter, error) {
 	conn, err := amqp.Dial(cfg.DSN())
 	if err != nil {
 		return nil, types.Wrap(err, types.ErrCodeInternal, "rabbitmq: failed to connect")
@@ -61,6 +65,7 @@ func NewAdapter(cfg Config) (*Adapter, error) {
 	return &Adapter{
 		conn:    conn,
 		channel: ch,
+		logger:  logger,
 	}, nil
 }
 
@@ -132,18 +137,24 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 		for {
 			select {
 			case <-ctx.Done():
-				log.Printf("rabbitmq: consumer for %q shutting down: %v", topic, ctx.Err())
+				if a.logger != nil {
+					a.logger.Info(ctx, "rabbitmq: consumer shutting down", shared_ports.Field{Key: "topic", Value: topic}, shared_ports.Field{Key: "err", Value: ctx.Err()})
+				}
 				return
 			case msg, ok := <-msgs:
 				if !ok {
-					log.Printf("rabbitmq: channel closed for %q", topic)
+					if a.logger != nil {
+						a.logger.Info(ctx, "rabbitmq: channel closed", shared_ports.Field{Key: "topic", Value: topic})
+					}
 					return
 				}
 
 				// Adapter handles deserialization
 				var task domain.Task
 				if err := json.Unmarshal(msg.Body, &task); err != nil {
-					log.Printf("rabbitmq: failed to unmarshal task on %q: %v", topic, err)
+					if a.logger != nil {
+						a.logger.ErrorErr(ctx, err, "rabbitmq: failed to unmarshal task", shared_ports.Field{Key: "topic", Value: topic})
+					}
 					msg.Nack(false, false) // Reject malformed messages
 					continue
 				}
@@ -152,7 +163,9 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 
 				// Acknowledge successful processing
 				if ackErr := msg.Ack(false); ackErr != nil {
-					log.Printf("rabbitmq: failed to ack message on %q: %v", topic, ackErr)
+					if a.logger != nil {
+						a.logger.ErrorErr(ctx, ackErr, "rabbitmq: failed to ack message", shared_ports.Field{Key: "topic", Value: topic})
+					}
 				}
 			}
 		}

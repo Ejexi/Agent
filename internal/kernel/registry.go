@@ -3,25 +3,25 @@ package kernel
 import (
 	"sync"
 
-	"github.com/SecDuckOps/agent/internal/tools/base"
+	"github.com/SecDuckOps/agent/internal/domain"
 	types "github.com/SecDuckOps/shared/types"
 )
 
 // Registry manages the available tools.
 type Registry struct {
-	tools map[string]base.Tool
+	tools map[string]domain.Tool
 	mu    sync.RWMutex
 }
 
 // NewRegistry creates a new tool registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]base.Tool),
+		tools: make(map[string]domain.Tool),
 	}
 }
 
 // Register adds a tool to the registry.
-func (r *Registry) Register(tool base.Tool) error {
+func (r *Registry) Register(tool domain.Tool) error {
 	if tool == nil {
 		return types.New(types.ErrCodeInvalidInput, "cannot register nil tool")
 	}
@@ -37,10 +37,22 @@ func (r *Registry) Register(tool base.Tool) error {
 }
 
 // Get retrieves a tool by name.
-func (r *Registry) Get(name string) (base.Tool, bool) {
+func (r *Registry) Get(name string) (domain.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	tool, exists := r.tools[name]
 	return tool, exists
+}
+
+// ListAll returns all registered tools.
+func (r *Registry) ListAll() []domain.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tools := make([]domain.Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		tools = append(tools, tool)
+	}
+	return tools
 }
