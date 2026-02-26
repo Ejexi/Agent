@@ -145,7 +145,7 @@ COPY --from=tools-installer /usr/local/bin/checkov      /usr/local/bin/
 # ── Copy compiled Go agent ────────────────────────────────────────────────────
 WORKDIR /app
 COPY --from=builder /go/bin/agent .
-COPY config.yaml .
+COPY .DuckOpsConfig.yaml .
 RUN chmod +x ./agent && chown -R duckops:duckops /app
 
 # ── Verify all tools at build time ────────────────────────────────────────────

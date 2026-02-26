@@ -6,7 +6,7 @@ import (
 
 	"github.com/SecDuckOps/agent/internal/domain"
 	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
-	tracker "github.com/SecDuckOps/agent/internal/subagent"
+	tracker "github.com/SecDuckOps/agent/internal/adapters/subagent"
 	"github.com/SecDuckOps/agent/internal/tools/base"
 )
 

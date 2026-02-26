@@ -14,7 +14,7 @@ tmp/
 .idea/
 .vscode/
 
-# Local configuration
+# Local .DuckOpsConfiguration
 .duckops/
 
 # Depending on your need, you might want to ignore local env files if you had them

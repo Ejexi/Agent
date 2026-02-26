@@ -31,7 +31,7 @@ services:
       - AGENT_LLM_LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
     volumes:
       - ./.duckops:/app/.duckops
-      - ./config.yaml:/app/config.yaml:ro
+      - ./.DuckOpsConfig.yaml:/app/.DuckOpsConfig.yaml:ro
       - scan_workspace:/workspace
     restart: unless-stopped
 

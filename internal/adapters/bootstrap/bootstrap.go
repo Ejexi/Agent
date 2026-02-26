@@ -8,7 +8,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/config"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	"github.com/SecDuckOps/agent/internal/ports"
-	sa "github.com/SecDuckOps/agent/internal/subagent"
+	sa "github.com/SecDuckOps/agent/internal/adapters/subagent"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/chat"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/delegate"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/echo"

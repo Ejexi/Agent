@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/SecDuckOps/agent/internal/auth"
+	"github.com/SecDuckOps/agent/internal/adapters/auth"
 	"github.com/SecDuckOps/shared/types"
 )
 

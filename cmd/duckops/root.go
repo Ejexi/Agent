@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/SecDuckOps/agent/internal/adapters/server"
-	"github.com/SecDuckOps/agent/internal/bootstrap"
+	"github.com/SecDuckOps/agent/internal/adapters/bootstrap"
 	"github.com/SecDuckOps/agent/internal/config"
 	"github.com/SecDuckOps/shared/types"
 )
@@ -16,7 +16,7 @@ import (
 var (
 	version = "dev"
 	commit  = "none"
-	date    = "unknown"
+	date    = "25/02/2026"
 )
 
 var (
@@ -42,7 +42,7 @@ and only pings when it needs a human.`,
 		// Start HTTP/SSE server in background
 		addr := tomlCfg.Settings.ServerAddr
 		if addr == "" {
-			addr = ":8090"
+			addr = ":8090" //api_endpoint
 		}
 		srv := server.NewAgentServer(app.Sessions, addr, app.Logger)
 		go func() {
