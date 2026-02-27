@@ -1,159 +1,191 @@
-# DuckOps Agent: The Autonomous Execution Engine
+# 🦆 DuckOps Agent
+
+The autonomous DevSecOps execution engine.
+
+---
 
 ## Overview
 
-The **DuckOps Agent** is a high‑performance, stateless worker engine designed to execute security and DevSecOps tasks in isolated environments. It follows a strict **Kernel‑Policy Architecture** built on Hexagonal principles, ensuring clear separation of concerns, testability, and easy extensibility.
+The **DuckOps Agent** is a production-grade, modular worker engine built in Go. It executes security and DevSecOps tasks following a strict **Kernel–Policy Architecture** on top of Hexagonal (Ports & Adapters) principles.
+
+> **Golden Rule:** The Kernel is the **only** component allowed to execute tools.
 
 ---
 
 ## Architecture
 
-The project is organized into the following layers (see `architecture.md` for details):
+The agent follows a layered architecture with strict dependency direction:
 
-- **Domain** – Core business types (`Tool`, `Task`, `Result`). No external dependencies.
-- **Kernel** – Orchestrates execution. Depends only on the domain.
-  - `registry.go` – Registers all available tools.
-  - `runtime.go` – Wraps tool execution with panic recovery, metrics, and logging.
-  - `dispatcher.go` – Routes incoming tasks from the MessageBus (RabbitMQ) to the kernel.
-- **Ports** – Interfaces for external systems (LLM, Memory, Filesystem, etc.).
-- **Adapters** – Implement ports (RabbitMQ, gRPC, DB, LLM). Contain **no business logic**.
-- **Tools** – Stateless execution units that implement the `domain.Tool` interface and use only ports.
-- **Cmd** – CLI entry point that invokes `kernel.Execute(task)`.
+```
+Infrastructure → Application → Domain
+```
+
+| Layer        | Package              | Description                                                                           |
+| ------------ | -------------------- | ------------------------------------------------------------------------------------- |
+| **Domain**   | `internal/domain/`   | Core entities (`Tool`, `Task`, `Result`), security types. Zero external dependencies. |
+| **Kernel**   | `internal/kernel/`   | Execution authority — Registry, Runtime, Dispatcher. Depends only on domain.          |
+| **Ports**    | `internal/ports/`    | Interfaces for all external systems (LLM, Memory, MessageBus, Warden, etc.)           |
+| **Adapters** | `internal/adapters/` | Concrete implementations of ports. No business logic.                                 |
+| **Tools**    | `internal/tools/`    | Stateless execution units implementing `domain.Tool`.                                 |
+| **Config**   | `internal/config/`   | TOML configuration (`~/.duckops/config.toml`).                                        |
+| **Entry**    | `cmd/duckops/`       | CLI commands (`run`, `serve`, `login`, `config`).                                     |
+
+> 📖 Full architecture documentation: [docs/architecture_guide.md](docs/architecture_guide.md)
 
 ---
 
 ## Directory Structure
 
 ```
-Agent/
-├─ cmd/                # CLI entry points
-├─ domain/             # Core types and interfaces
-├─ kernel/             # Registry, Runtime, Dispatcher
-├─ ports/              # Port interfaces (LLM, Memory, FS, etc.)
-├─ adapters/           # Implementations of ports
-│   ├─ rabbitmq/       # RabbitMQ adapter
-│   ├─ grpc/           # gRPC adapter
-│   └─ llm/            # LLM adapter
-├─ tools/              # Stateless tool implementations
-│   ├─ scan/           # Example: SecurityScanner
-│   └─ remediation/   # Example: RemediationTool
-└─ internal/           # Shared utilities (logging, errors)
+agent/
+├── cmd/duckops/                    # CLI entry point (main, run, serve, login)
+├── docs/                           # Architecture guide & documentation
+├── internal/
+│   ├── domain/                     # Core types & interfaces
+│   │   ├── rag/                    #   RAG domain types
+│   │   ├── security/              #   Warden, secrets, audit types
+│   │   └── subagent/              #   Subagent lifecycle types
+│   ├── kernel/                     # Execution authority
+│   │   ├── kernel.go              #   Kernel (Registry + Runtime + Dispatcher)
+│   │   ├── registry.go            #   Thread-safe tool registration
+│   │   ├── runtime.go             #   Single & batch tool execution
+│   │   └── dispatcher.go          #   Message bus task listener
+│   ├── ports/                      # Interface definitions (13 ports)
+│   ├── config/                     # TOML config loading
+│   ├── adapters/                   # Infrastructure implementations
+│   │   ├── bootstrap/             #   Composition Root (dependency wiring)
+│   │   ├── subagent/              #   Session lifecycle (Tracker, Bridge)
+│   │   ├── rabbitmq/              #   Message bus adapter
+│   │   ├── elasticsearch/         #   Log storage adapter
+│   │   ├── warden/                #   Network sandbox proxy (Cedar)
+│   │   ├── secrets/               #   Secret scanner adapter
+│   │   ├── audit/                 #   Audit logging adapter
+│   │   ├── server/                #   HTTP server adapter
+│   │   └── ...                    #   More adapters
+│   └── tools/                      # Tool implementations
+│       ├── base/                  #   TypedToolBase[P] generic helper
+│       └── implementations/       #   Concrete tools
+│           ├── chat/              #     LLM conversation
+│           ├── scan/              #     Security scanning
+│           ├── subagent/          #     Spawn/resume sub-agents
+│           ├── delegate/          #     Capability-matched delegation
+│           ├── echo/              #     Testing/debugging
+│           ├── kubernetes/        #     K8s operations (planned)
+│           └── vectordb/          #     Vector DB operations (planned)
+├── Dockerfile
+├── docker-compose.yml
+├── Makefile
+├── go.mod
+└── go.sum
 ```
 
 ---
 
-## Core Components
+## Execution Flow
 
-### Registry (`kernel/registry.go`)
-
-- Maintains a map of tool name → `domain.Tool` instance.
-- Populated during bootstrap by each tool calling `registry.Register(name, tool)`.
-
-### Runtime (`kernel/runtime.go`)
-
-- Executes a tool inside a safe wrapper.
-- Handles panic recovery, logs execution time, and returns a structured `domain.Result`.
-
-### Dispatcher (`kernel/dispatcher.go`)
-
-- Listens on the **MessageBus** (RabbitMQ) for incoming tasks.
-- Deserialises the payload and forwards it to the kernel.
+```
+CLI → Bootstrap → Kernel → Runtime → Tool → Result
+                    ↕
+             Message Bus (RabbitMQ)
+                    ↕
+              Dispatcher → Worker → Result
+```
 
 ---
 
-## Tool Development Guide
+## Tool Interface
 
-Every tool must implement the following interface (see `domain/tool.go`):
+Every tool implements `domain.Tool`:
 
 ```go
 type Tool interface {
     Name() string
-    Run(ctx context.Context, task Task) (Result, error)
+    Schema() ToolSchema
+    ExecuteRaw(ctx context.Context, input map[string]interface{}) (Result, error)
 }
 ```
 
-### Golden Rules for Tools
+### Rules for Tools
 
-1. **Stateless** – No internal mutable state between runs.
-2. **No direct I/O** – Use injected ports for filesystem, LLM, memory, etc.
-3. **Error Handling** – Return `types.New` or `types.Wrap` wrapped `AppError` objects.
-4. **Deterministic** – Given the same input, the tool should produce the same output (unless explicitly nondeterministic, e.g., LLM).
-
-### Example Implementation
-
-```go
-type SecurityScanner struct {
-    llm ports.LLM // injected port
-}
-
-func (s *SecurityScanner) Name() string { return "security-scan" }
-
-func (s *SecurityScanner) Run(ctx context.Context, task domain.Task) (domain.Result, error) {
-    target, ok := task.Args["target"].(string)
-    if !ok {
-        return domain.Result{}, types.New(types.ErrCodeInvalidInput, "missing target path")
-    }
-    finding, err := s.llm.Generate(ctx, "Scan this: "+target)
-    if err != nil {
-        return domain.Result{}, types.Wrap(err, types.ErrCodeToolFailed, "llm analysis failed")
-    }
-    return domain.Result{Success: true, Data: finding}, nil
-}
-```
+1. **Stateless** — No internal mutable state between runs.
+2. **No direct I/O** — Use injected ports for all external access.
+3. **Error handling** — Return `types.New` or `types.Wrap` wrapped errors.
+4. **Deterministic** — Same input → same output (unless explicitly nondeterministic).
 
 ---
 
 ## Adding a New Tool
 
-1. Create a new package under `tools/`.
-2. Implement the `Tool` interface.
-3. Register the tool in `kernel/registry.go` during bootstrap.
-4. Write unit tests in the same package (`*_test.go`).
-5. Add any required port interfaces in `ports/` and adapters if needed.
-6. Update `README.md` (this file) with a short description under **Available Tools**.
+1. Create a package under `internal/tools/implementations/<name>/`.
+2. Implement `domain.Tool` (or embed `base.TypedToolBase[P]` for type safety).
+3. Register in `internal/adapters/bootstrap/bootstrap.go` → `registerTools()`.
+4. Add a `README.md` to the new directory.
+5. Write unit tests (`*_test.go`).
+
+---
+
+## Configuration
+
+Config lives at `~/.duckops/config.toml`. Auto-created on first run.
+
+```toml
+[profiles.default]
+provider = "openrouter"
+
+[profiles.default.providers.openrouter]
+type = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+[profiles.default.providers.openrouter.auth]
+type = "env"
+key = "OPENROUTER_API_KEY"
+
+[settings]
+agent_mode = "standalone"    # "standalone" or "super"
+server_addr = ":8090"
+```
 
 ---
 
 ## Testing
 
-- Run all unit tests: `go test ./...`
-- Use the `mock` adapters in `adapters/mock/` to stub external services.
-- CI pipeline runs `golangci-lint` and `go vet` to enforce code quality.
+```bash
+go test ./...
+```
 
-<<<<<<< HEAD
-This repository depends on **[DuckOps Shared](https://github.com/SecDuckOps/shared)**.
-It provides the shared `AppError` system, LLM ports, and event types used to communicate with the server.
-=======
+- **Unit tests** — Domain and kernel tested with mocks (no infrastructure).
+- **Integration tests** — Adapters tested separately.
+- **Linting** — `golangci-lint` and `go vet` enforced in CI.
+
 ---
->>>>>>> fb454bbb5b4bd6625d326e3c041c589d119b8087
+
+## Dependencies
+
+This module depends on **[DuckOps Shared](https://github.com/SecDuckOps/shared)** which provides the shared `AppError` system, LLM ports, and event types.
+
+```bash
+# Local development
+replace github.com/SecDuckOps/shared => ../shared
+```
+
+The Agent interacts with the **[Server](https://github.com/SecDuckOps/server)** asynchronously via RabbitMQ. It is a "Remote Procedure Call" target for the Server's Orchestrator and remains completely unaware of the Server's persistence or state machine.
+
+---
 
 ## Contributing
 
-<<<<<<< HEAD
-```bash
-# Example go.mod replace
-replace github.com/SecDuckOps/shared => ../shared
-```
-=======
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feat/your-feature`).
-3. Follow the **Hexagonal Architecture** guidelines – keep domain pure.
+3. Follow **Hexagonal Architecture** guidelines — keep domain pure.
 4. Write tests for every new function.
 5. Run `go fmt` and `golangci-lint` locally.
-6. Submit a Pull Request with a clear description and link to the relevant issue.
->>>>>>> fb454bbb5b4bd6625d326e3c041c589d119b8087
+6. Submit a Pull Request with a clear description.
 
 ---
 
-<<<<<<< HEAD
-The Agent is a worker that interacts with the **[Server](https://github.com/SecDuckOps/server)** asynchronously via RabbitMQ.
-It is essentially a "Remote Procedure Call" target for the Server's Orchestrator. It remains completely unaware of the Server's persistence or state machine.
-=======
 ## License
 
-MIT License – see `LICENSE` file.
->>>>>>> fb454bbb5b4bd6625d326e3c041c589d119b8087
+MIT License — see `LICENSE` file.
 
 ---
 
-_DuckOps Agent: Secure, Isolated, Autonomous._
+_DuckOps Agent: Secure, Isolated, Autonomous._ 🦆
