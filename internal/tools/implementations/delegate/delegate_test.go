@@ -6,7 +6,7 @@ import (
 
 	"github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/ports"
-	tracker "github.com/SecDuckOps/agent/internal/subagent"
+	tracker "github.com/SecDuckOps/agent/internal/adapters/subagent"
 )
 
 // mockTracker is a minimal mock for the tracker interface

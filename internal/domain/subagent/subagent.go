@@ -49,7 +49,7 @@ type RetryPolicy struct {
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
 		MaxRetries: 3,
-		DelayMs:    1000,
+		DelayMs:    1000, // milliseconds (default: 1000)
 	}
 }
 
