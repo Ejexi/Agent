@@ -42,3 +42,7 @@ tmp/
 secrets/
 test.log
 
+# Logs
+logs/*
+*.log
+!logs/.keep
