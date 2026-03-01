@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/SecDuckOps/agent/internal/adapters/bootstrap"
 	"github.com/SecDuckOps/agent/internal/adapters/server"
-	"github.com/SecDuckOps/agent/internal/bootstrap"
 	"github.com/SecDuckOps/agent/internal/config"
 	shared_ports "github.com/SecDuckOps/shared/ports"
 	"github.com/SecDuckOps/shared/types"
@@ -54,7 +54,7 @@ var serveCmd = &cobra.Command{
 
 		select {
 		case sig := <-sigChan:
-			app.Logger.Info(context.Background(), "Shutting down server...", shared_ports.Field{Key: "signal", Value: sig})
+			app.Logger.Info(context.Background(), "system_event", "Shutting down server...", shared_ports.Field{Key: "signal", Value: sig})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			return srv.Stop(ctx)

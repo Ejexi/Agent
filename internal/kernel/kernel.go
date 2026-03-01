@@ -16,6 +16,7 @@ type Dependencies struct {
 	Memory     ports.MemoryPort
 	LLM        shared_domain.LLMRegistry
 	Logger     shared_ports.Logger
+	AuditLog   ports.AuditLogPort
 }
 
 // Kernel is the execution authority — it coordinates registry, runtime and dispatching.
@@ -31,7 +32,7 @@ type Kernel struct {
 // New creates a new Kernel instance.
 func New(deps Dependencies) *Kernel {
 	reg := NewRegistry()
-	run := NewRuntime(reg)
+	run := NewRuntime(reg, deps.AuditLog)
 	disp := NewDispatcher(run, deps.MessageBus, deps.Logger)
 
 	if reg == nil || run == nil || disp == nil {

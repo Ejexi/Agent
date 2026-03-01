@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/SecDuckOps/agent/internal/bootstrap"
+	"github.com/SecDuckOps/agent/internal/adapters/bootstrap"
 	"github.com/SecDuckOps/agent/internal/config"
 	shared_ports "github.com/SecDuckOps/shared/ports"
 	"github.com/SecDuckOps/shared/types"
@@ -23,7 +23,7 @@ var runCmd = &cobra.Command{
 
 		app := bootstrap.FromTOML(tomlCfg)
 
-		app.Logger.Info(context.Background(), "Starting interactive mode", shared_ports.Field{Key: "provider", Value: app.Provider})
+		app.Logger.Info(context.Background(), "agent_start", "Starting interactive mode", shared_ports.Field{Key: "provider", Value: app.Provider})
 		runInteractive(app.Kernel, app.Provider, "standalone")
 
 		return nil

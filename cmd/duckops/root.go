@@ -6,16 +6,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/SecDuckOps/agent/internal/adapters/server"
 	"github.com/SecDuckOps/agent/internal/adapters/bootstrap"
+	"github.com/SecDuckOps/agent/internal/adapters/server"
 	"github.com/SecDuckOps/agent/internal/config"
 	"github.com/SecDuckOps/shared/types"
 )
 
 // Build-time variables (set via -ldflags)
 var (
-	version = "dev"
-	commit  = "none"
+	version = "Dev"
+	commit  = "DuckOps - Team"
 	date    = "25/02/2026"
 )
 
@@ -46,9 +46,9 @@ and only pings when it needs a human.`,
 		}
 		srv := server.NewAgentServer(app.Sessions, addr, app.Logger)
 		go func() {
-			fmt.Printf("🌐 Server listening on %s\n", addr)
+			app.Logger.Info(context.Background(), "system_event", fmt.Sprintf("Server listening on %s", addr))
 			if err := srv.Start(); err != nil {
-				app.Logger.ErrorErr(context.Background(), err, "Server error")
+				app.Logger.ErrorErr(context.Background(), "operation_failed", err, "Server error")
 			}
 		}()
 
@@ -67,6 +67,7 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(NewLogCmd())
 }
 
 var versionCmd = &cobra.Command{

@@ -49,7 +49,7 @@ func (s *AgentServer) Start() error {
 	}
 
 	if s.logger != nil {
-		s.logger.Info(context.Background(), "AgentServer Listening", shared_ports.Field{Key: "addr", Value: s.addr})
+		s.logger.Info(context.Background(), "system_event", "AgentServer Listening", shared_ports.Field{Key: "addr", Value: s.addr})
 	}
 	return s.server.ListenAndServe()
 }

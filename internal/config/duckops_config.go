@@ -98,6 +98,7 @@ type Settings struct {
 // 	LLMs        map[string]LLMConfig `mapstructure:"llm" json:"llm,omitempty"`
 // 	Provider    string               `json:"provider"`
 // }
+
 // ========================
 // ~/.duckops/ Management
 // ========================
@@ -157,6 +158,16 @@ func writeDefaultConfig(path string) error {
 						Auth:    &ProviderAuth{Type: "env", Key: "OPENROUTER_API_KEY"},
 					},
 				},
+				Warden: &WardenConfig{
+					Enabled:     true,
+					DefaultDeny: false,
+				},
+				Secrets: &SecretsConfig{
+					Enabled: true,
+				},
+				Audit: &AuditConfig{
+					Enabled: true,
+				},
 			},
 		},
 		Settings: Settings{
@@ -177,8 +188,6 @@ func writeDefaultConfig(path string) error {
 	header := []byte("# DuckOps Agent Configuration\n# See: https://github.com/SecDuckOps/agent/docs\n\n")
 	return os.WriteFile(path, append(header, data...), 0600)
 }
-
-
 
 // ========================
 // Config Loading

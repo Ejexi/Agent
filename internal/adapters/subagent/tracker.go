@@ -82,16 +82,18 @@ type Tracker struct {
 	sessions       map[string]*SubagentSession
 	executor       ports.ToolExecutor
 	schemaProvider ports.ToolSchemaProvider
+	secretScanner  ports.SecretScannerPort
 	logger         shared_ports.Logger
 	mu             sync.RWMutex
 }
 
 // NewTracker creates a new subagent tracker.
-func NewTracker(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProvider, logger shared_ports.Logger) *Tracker {
+func NewTracker(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProvider, secretScanner ports.SecretScannerPort, logger shared_ports.Logger) *Tracker {
 	return &Tracker{
 		sessions:       make(map[string]*SubagentSession),
 		executor:       executor,
 		schemaProvider: schemaProvider,
+		secretScanner:  secretScanner,
 		logger:         logger,
 	}
 }
@@ -286,7 +288,7 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 
 	session.SetStatus(sa.StatusRunning)
 
-	actor := NewSessionActor(t.executor, t.schemaProvider, session)
+	actor := NewSessionActor(t.executor, t.schemaProvider, t.secretScanner, session)
 	err := actor.Run()
 
 	if err != nil {
@@ -326,12 +328,12 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 			newSessionID, retryErr := t.spawnWithRetry(parentID, originalID, config, retryCount+1)
 			if retryErr != nil {
 				if t.logger != nil {
-					t.logger.ErrorErr(session.Ctx, retryErr, "Failed to spawn retry session", shared_ports.Field{Key: "original_id", Value: originalID})
+					t.logger.ErrorErr(session.Ctx, "operation_failed", retryErr, "Failed to spawn retry session", shared_ports.Field{Key: "original_id", Value: originalID})
 				}
 				session.SetStatus(sa.StatusFailed)
 			} else {
 				if t.logger != nil {
-					t.logger.Info(session.Ctx, "Spawned retry session",
+					t.logger.Info(session.Ctx, "system_event", "Spawned retry session",
 						shared_ports.Field{Key: "new_session_id", Value: newSessionID},
 						shared_ports.Field{Key: "attempt", Value: retryCount + 1},
 						shared_ports.Field{Key: "original_id", Value: originalID})

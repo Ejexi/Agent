@@ -3,20 +3,25 @@ package kernel
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/domain/security"
+	"github.com/SecDuckOps/agent/internal/ports"
 	types "github.com/SecDuckOps/shared/types"
 )
 
 // Runtime handles the execution of tools.
 type Runtime struct {
 	registry *Registry
+	auditLog ports.AuditLogPort
 }
 
 // NewRuntime creates a new runtime.
-func NewRuntime(registry *Registry) *Runtime {
+func NewRuntime(registry *Registry, auditLog ports.AuditLogPort) *Runtime {
 	return &Runtime{
 		registry: registry,
+		auditLog: auditLog,
 	}
 }
 
@@ -41,6 +46,20 @@ func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result,
 		}, err
 	}
 
+	// 1. Audit Log: Tool Execution Started
+	if r.auditLog != nil {
+		_ = r.auditLog.Record(ctx, security.AuditEntry{
+			SessionID: task.SessionID, // Requires SessionID on Task
+			Action:    security.AuditToolExecute,
+			Actor:     "kernel",
+			Target:    task.Tool,
+			Details: map[string]interface{}{
+				"args": task.Args,
+			},
+			Timestamp: time.Now(),
+		})
+	}
+
 	// Runtime executes the tool (only the runtime should execute this)
 	result, err := tool.ExecuteRaw(ctx, task.Args)
 	if err != nil {
@@ -50,6 +69,21 @@ func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result,
 
 	// Ensure the result has the correct TaskID
 	result.TaskID = task.ID
+
+	// 2. Audit Log: Tool Execution Completed
+	if r.auditLog != nil {
+		_ = r.auditLog.Record(ctx, security.AuditEntry{
+			SessionID: task.SessionID,
+			Action:    security.AuditToolResult,
+			Actor:     "kernel",
+			Target:    task.Tool,
+			Details: map[string]interface{}{
+				"success": result.Success,
+				"error":   result.Error,
+			},
+			Timestamp: time.Now(),
+		})
+	}
 
 	return result, nil
 }

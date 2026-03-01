@@ -35,7 +35,7 @@ func (d *Dispatcher) Start(ctx context.Context, inTopic, outTopic string) error 
 	err := d.bus.Subscribe(ctx, inTopic, func(task domain.Task) {
 		result, err := d.runtime.Execute(ctx, task)
 		if err != nil && d.logger != nil {
-			d.logger.ErrorErr(ctx, err, "Task execution failed")
+			d.logger.ErrorErr(ctx, "operation_failed", err, "Task execution failed")
 		}
 
 		// Ensure the Task ID is part of the result for correlation on the server
@@ -47,7 +47,7 @@ func (d *Dispatcher) Start(ctx context.Context, inTopic, outTopic string) error 
 		if d.bus != nil {
 			pubErr := d.bus.Publish(ctx, outTopic, result)
 			if pubErr != nil && d.logger != nil {
-				d.logger.ErrorErr(ctx, pubErr, "Failed to publish result")
+				d.logger.ErrorErr(ctx, "operation_failed", pubErr, "Failed to publish result")
 			}
 		}
 	})

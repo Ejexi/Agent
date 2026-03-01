@@ -18,7 +18,7 @@ var loginCmd = &cobra.Command{
 		if apiKey == "" {
 			return types.New(types.ErrCodeInvalidInput, "--api-key is required")
 		}
-
+ 
 		store, err := auth.NewStore("")
 		if err != nil {
 			return types.Wrap(err, types.ErrCodeInternal, "failed to initialize auth store")

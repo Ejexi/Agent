@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/domain/security"
 	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/ports"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
@@ -35,13 +36,15 @@ type agentToolCall struct {
 type SessionActor struct {
 	executor       ports.ToolExecutor
 	schemaProvider ports.ToolSchemaProvider
+	secretScanner  ports.SecretScannerPort
 	session        *SubagentSession
 }
 
-func NewSessionActor(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProvider, session *SubagentSession) *SessionActor {
+func NewSessionActor(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProvider, secretScanner ports.SecretScannerPort, session *SubagentSession) *SessionActor {
 	return &SessionActor{
 		executor:       executor,
 		schemaProvider: schemaProvider,
+		secretScanner:  secretScanner,
 		session:        session,
 	}
 }
@@ -175,10 +178,34 @@ func (a *SessionActor) Run() error {
 			Message: fmt.Sprintf("Step %d/%d", i+1, maxSteps),
 		})
 
+		// ===== Scrub Secrets Before LLM =====
+		promptText := "No prompt generated yet"
+		if len(messages) > 0 {
+			promptText = messages[len(messages)-1].Content
+		}
+
+		var pm security.PlaceholderMap
+		if a.secretScanner != nil {
+			var scrubbed string
+			scrubbed, pm = a.secretScanner.Scrub(a.session.Subagent.SessionID, promptText)
+			if scrubbed != promptText {
+				messages[len(messages)-1].Content = scrubbed
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventLog,
+					Message: "Detected and scrubbed secrets from prompt before LLM call",
+				})
+			}
+		}
+
 		// ===== Call LLM =====
 		response, err := llm.Generate(ctx, messages, nil)
 		if err != nil {
 			return types.Wrapf(err, types.ErrCodeInternal, "LLM call failed on step %d", i+1)
+		}
+
+		// ===== Restore Secrets After LLM =====
+		if a.secretScanner != nil && len(pm.Mappings) > 0 {
+			response = a.secretScanner.Restore(response, pm)
 		}
 
 		// ===== Parse response =====
@@ -228,8 +255,13 @@ func (a *SessionActor) Run() error {
 
 				if !approved {
 					// Tool rejected — inform LLM
+					// Scrub the response before appending to context (though it should be clean from LLM)
+					cleanResponse := response
+					if a.secretScanner != nil {
+						cleanResponse, _ = a.secretScanner.Scrub(a.session.Subagent.SessionID, response)
+					}
 					messages = append(messages, shared_domain.Message{
-						Role: shared_domain.RoleAssistant, Content: response,
+						Role: shared_domain.RoleAssistant, Content: cleanResponse,
 					})
 					messages = append(messages, shared_domain.Message{
 						Role:    shared_domain.RoleUser,

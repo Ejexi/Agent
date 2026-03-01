@@ -138,13 +138,13 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 			select {
 			case <-ctx.Done():
 				if a.logger != nil {
-					a.logger.Info(ctx, "rabbitmq: consumer shutting down", shared_ports.Field{Key: "topic", Value: topic}, shared_ports.Field{Key: "err", Value: ctx.Err()})
+					a.logger.Info(ctx, "system_event", "rabbitmq: consumer shutting down", shared_ports.Field{Key: "topic", Value: topic}, shared_ports.Field{Key: "err", Value: ctx.Err()})
 				}
 				return
 			case msg, ok := <-msgs:
 				if !ok {
 					if a.logger != nil {
-						a.logger.Info(ctx, "rabbitmq: channel closed", shared_ports.Field{Key: "topic", Value: topic})
+						a.logger.Info(ctx, "system_event", "rabbitmq: channel closed", shared_ports.Field{Key: "topic", Value: topic})
 					}
 					return
 				}
@@ -153,7 +153,7 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 				var task domain.Task
 				if err := json.Unmarshal(msg.Body, &task); err != nil {
 					if a.logger != nil {
-						a.logger.ErrorErr(ctx, err, "rabbitmq: failed to unmarshal task", shared_ports.Field{Key: "topic", Value: topic})
+						a.logger.ErrorErr(ctx, "operation_failed", err, "rabbitmq: failed to unmarshal task", shared_ports.Field{Key: "topic", Value: topic})
 					}
 					msg.Nack(false, false) // Reject malformed messages
 					continue
@@ -164,7 +164,7 @@ func (a *Adapter) Subscribe(ctx context.Context, topic string, handler func(doma
 				// Acknowledge successful processing
 				if ackErr := msg.Ack(false); ackErr != nil {
 					if a.logger != nil {
-						a.logger.ErrorErr(ctx, ackErr, "rabbitmq: failed to ack message", shared_ports.Field{Key: "topic", Value: topic})
+						a.logger.ErrorErr(ctx, "operation_failed", ackErr, "rabbitmq: failed to ack message", shared_ports.Field{Key: "topic", Value: topic})
 					}
 				}
 			}
