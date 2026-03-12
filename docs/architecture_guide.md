@@ -434,7 +434,7 @@ Supports:
 - Warden sandbox settings
 - Secret scanning settings
 - Audit logging settings
-- Agent modes: `standalone` | `super`
+- Agent modes: `Stand Duck ` | `super`
 
 ---
 

@@ -23,8 +23,8 @@ var runCmd = &cobra.Command{
 
 		app := bootstrap.FromTOML(tomlCfg)
 
-		app.Logger.Info(context.Background(), "agent_start", "Starting interactive mode", shared_ports.Field{Key: "provider", Value: app.Provider})
-		runInteractive(app.Kernel, app.Provider, "standalone")
+		app.Logger.Info(context.Background(), "Starting interactive mode", shared_ports.Field{Key: "provider", Value: app.Provider})
+		runInteractive(app.Kernel, app.Provider, "Stand Duck ")
 
 		return nil
 	},

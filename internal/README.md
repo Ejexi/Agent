@@ -19,7 +19,7 @@ All internal packages for the DuckOps Agent. Not importable by external modules.
 adapters → ports → domain
 tools    → ports + domain
 kernel   → domain
-config   → (standalone)
+config   → (Stand Duck )
 ```
 
 Domain and ports have **zero** infrastructure dependencies.

@@ -140,7 +140,7 @@ type = "env"
 key = "OPENROUTER_API_KEY"
 
 [settings]
-agent_mode = "standalone"    # "standalone" or "super"
+agent_mode = "Stand Duck "    # "Stand Duck " or "super"
 server_addr = ":8090"
 ```
 

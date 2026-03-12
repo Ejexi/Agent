@@ -4,7 +4,7 @@ Remote configuration synchronization adapter. Implements `ports.ConfigSyncPort`.
 
 ## Purpose
 
-Fetches configuration updates from the API Gateway when the agent runs in **Super Mode**. Periodically syncs:
+Fetches configuration updates from the API Gateway when the agent runs in **Super Duck**. Periodically syncs:
 
 - Subagent capability profiles
 - Security rules

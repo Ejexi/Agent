@@ -13,6 +13,7 @@ Main CLI application for the DuckOps Agent.
 | `runtime.go`    | Shared runtime setup (Kernel + Tracker init)       |
 | `login.go`      | `duckops login` — API Gateway authentication       |
 | `config_cmd.go` | `duckops config` — view/edit configuration         |
+| `log.go`        | `duckops log` — audit log                          |
 
 ## Execution Flow
 

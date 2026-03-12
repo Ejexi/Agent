@@ -77,7 +77,7 @@ RUN GOBUSTER_VERSION=$(curl -s https://api.github.com/repos/OJ/gobuster/releases
     curl -sSfL "https://github.com/OJ/gobuster/releases/download/v${GOBUSTER_VERSION}/gobuster_Linux_x86_64.tar.gz" \
     | tar -xz -C /usr/local/bin gobuster
 
-# ── Checkov standalone binary ─────────────────────────────────────────────────
+# ── Checkov Stand Duck  binary ─────────────────────────────────────────────────
 RUN curl -sSfL "https://github.com/bridgecrewio/checkov/releases/latest/download/checkov_linux_X86_64.zip" \
     -o /tmp/checkov.zip && \
     unzip /tmp/checkov.zip -d /usr/local/bin && \

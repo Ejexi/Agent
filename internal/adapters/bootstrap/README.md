@@ -19,7 +19,7 @@ Config → Logger → LLM Registry → Kernel → Tracker → Register Tools →
 3. Creates the Kernel with dependencies
 4. Creates KernelBridge + Tracker (subagent system)
 5. Registers all tools with the Kernel
-6. Handles Super Mode (remote config sync)
+6. Handles Super Duck (remote config sync)
 
 ## Rules
 

@@ -13,6 +13,9 @@ type WardenPort interface {
 	// Evaluate checks a network request against loaded Cedar policies.
 	Evaluate(ctx context.Context, req security.NetworkRequest) (security.PolicyDecision, error)
 
+	// EvaluateExecution checks a local OS execution request against Cedar policies.
+	EvaluateExecution(ctx context.Context, req security.ExecutionRequest) (security.PolicyDecision, error)
+
 	// LoadPolicies loads Cedar policies from config or file.
 	LoadPolicies(ctx context.Context, policies []security.NetworkPolicy) error
 

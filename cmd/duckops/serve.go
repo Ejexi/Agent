@@ -54,7 +54,7 @@ var serveCmd = &cobra.Command{
 
 		select {
 		case sig := <-sigChan:
-			app.Logger.Info(context.Background(), "system_event", "Shutting down server...", shared_ports.Field{Key: "signal", Value: sig})
+			app.Logger.Info(context.Background(), "Shutting down server...", shared_ports.Field{Key: "signal", Value: sig})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			return srv.Stop(ctx)

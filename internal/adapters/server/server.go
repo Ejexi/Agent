@@ -14,7 +14,7 @@ import (
 )
 
 // AgentServer is the HTTP API for managing subagent sessions.
-// Delegates to the standalone subagent.Tracker — no kernel dependency.
+// Delegates to the Stand Duck  subagent.Tracker — no kernel dependency.
 type AgentServer struct {
 	sessions ports.SessionManager
 	server   *http.Server
@@ -49,7 +49,7 @@ func (s *AgentServer) Start() error {
 	}
 
 	if s.logger != nil {
-		s.logger.Info(context.Background(), "system_event", "AgentServer Listening", shared_ports.Field{Key: "addr", Value: s.addr})
+		s.logger.Info(context.Background(), "AgentServer Listening", shared_ports.Field{Key: "addr", Value: s.addr})
 	}
 	return s.server.ListenAndServe()
 }

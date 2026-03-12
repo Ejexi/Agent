@@ -2,19 +2,29 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/SecDuckOps/agent/internal/adapters/configsync"
+	"github.com/SecDuckOps/agent/internal/adapters/executor"
 	"github.com/SecDuckOps/agent/internal/adapters/secrets"
+	"github.com/SecDuckOps/agent/internal/adapters/security"
 	sa "github.com/SecDuckOps/agent/internal/adapters/subagent"
+	"github.com/SecDuckOps/agent/internal/adapters/translator"
+	warden_adapter "github.com/SecDuckOps/agent/internal/adapters/warden"
+	"github.com/SecDuckOps/agent/internal/application/taskengine"
 	"github.com/SecDuckOps/agent/internal/config"
+	domain_security "github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/chat"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/delegate"
-	"github.com/SecDuckOps/agent/internal/tools/implementations/echo"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/scan"
-	subagent_tool "github.com/SecDuckOps/agent/internal/tools/implementations/subagent"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/subagent"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/terminal"
+	"github.com/google/uuid"
 
 	"time"
 
@@ -35,7 +45,10 @@ type App struct {
 
 // FromTOML bootstraps the application from ~/.duckops/config.toml.
 func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
-	appLogger, err := logger.New("duckops-agent", "info")
+	dir, _ := config.DuckOpsDir()
+	logPath := filepath.Join(dir, "duckops.log")
+
+	appLogger, err := logger.New("duckops-agent", "info", logPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
@@ -43,7 +56,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 
 	profile, ok := tomlCfg.GetProfile("default")
 	if !ok {
-		appLogger.ErrorErr(ctx, "agent_config_failed", nil, "No 'default' profile found in config.toml")
+		appLogger.ErrorErr(ctx, fmt.Errorf("agent_config_failed"), "No 'default' profile found in config.toml")
 		log.Fatal("No 'default' profile found in config.toml")
 	}
 
@@ -51,17 +64,17 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 	capabilityRegistry := sa.NewCapabilityRegistry()
 
 	// ---------------------------------------------------------
-	// SUPER MODE LOGIC
+	// Super Duck LOGIC
 	// ---------------------------------------------------------
 	if tomlCfg.Settings.AgentMode == "super" {
-		appLogger.Info(ctx, "config_sync_started", "⚡ Starting in SUPER MODE. Connecting to API Gateway...", shared_ports.Field{Key: "url", Value: tomlCfg.Settings.APIGatewayURL})
+		appLogger.Info(ctx, "⚡ Starting in Super Duck. Connecting to API Gateway...", shared_ports.Field{Key: "url", Value: tomlCfg.Settings.APIGatewayURL})
 		syncAdapter := configsync.NewHTTPAdapter(tomlCfg.Settings.APIGatewayURL, "") // TODO: API Key
 
 		remoteCfg, err := syncAdapter.FetchRemoteConfig(ctx)
 		if err != nil {
-			appLogger.ErrorErr(ctx, "config_sync_failed", err, "Failed to fetch remote config on startup, falling back to local config")
+			appLogger.ErrorErr(ctx, err, "Failed to fetch remote config on startup, falling back to local config")
 		} else {
-			appLogger.Info(ctx, "config_sync_success", "Successfully fetched remote config", shared_ports.Field{Key: "rules_count", Value: len(remoteCfg.Rules)})
+			appLogger.Info(ctx, "Successfully fetched remote config", shared_ports.Field{Key: "rules_count", Value: len(remoteCfg.Rules)})
 			capabilityRegistry.Sync(remoteCfg.Capabilities)
 			// TODO: Merge remoteCfg into local profile
 		}
@@ -74,7 +87,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 				case <-ticker.C:
 					cfg, err := syncAdapter.FetchRemoteConfig(context.Background())
 					if err != nil {
-						appLogger.ErrorErr(context.Background(), "config_sync_failed", err, "Periodic config sync failed")
+						appLogger.ErrorErr(context.Background(), err, "Periodic config sync failed")
 					} else {
 						capabilityRegistry.Sync(cfg.Capabilities)
 						// silent success, no need to spam logs unless changed
@@ -88,14 +101,45 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 
 	llmRegistry := buildLLMRegistry(profile, appLogger)
 
+	// Initialize Warden (Cedar policy evaluator)
+	useDefaultDeny := true
+	if profile.Warden != nil {
+		useDefaultDeny = profile.Warden.DefaultDeny
+	}
+	wardenInstance := warden_adapter.New(useDefaultDeny)
+
+	// Load policies
+	var policies []domain_security.NetworkPolicy
+	if profile.Warden != nil && len(profile.Warden.PolicyFiles) > 0 {
+		for _, path := range profile.Warden.PolicyFiles {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				appLogger.ErrorErr(ctx, err, "Failed to read policy file", shared_ports.Field{Key: "path", Value: path})
+				continue
+			}
+			policies = append(policies, domain_security.NetworkPolicy{
+				ID:        uuid.New().String(),
+				Name:      filepath.Base(path),
+				CedarBody: string(content),
+				Enabled:   true,
+				Priority:  10,
+			})
+		}
+	}
+
+	if err := wardenInstance.LoadPolicies(ctx, policies); err != nil {
+		appLogger.ErrorErr(ctx, err, "Failed to load Warden policies")
+	}
+
 	// Kernel
 	deps := kernel.Dependencies{
 		LLM:    llmRegistry,
 		Logger: appLogger,
+		Warden: wardenInstance,
 	}
 	k := kernel.New(deps)
 	if k == nil {
-		appLogger.ErrorErr(ctx, "kernel_init_failed", nil, "Kernel initialization failed")
+		appLogger.ErrorErr(ctx, fmt.Errorf("kernel_init_failed"), "Kernel initialization failed")
 		log.Fatal("Kernel initialization failed")
 	}
 
@@ -112,10 +156,10 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 		// Use empty string to load just the default embedded patterns
 		scanner, scanErr := secrets.NewWithCustomPatterns("")
 		if scanErr != nil {
-			appLogger.ErrorErr(ctx, "security_scanner_failed", scanErr, "Failed to initialize Secret Scanner, secrets will NOT be scrubbed")
+			appLogger.ErrorErr(ctx, scanErr, "Failed to initialize Secret Scanner, secrets will NOT be scrubbed")
 		} else {
 			secretScanner = scanner
-			appLogger.Info(ctx, "security_scanner_initialized", "Secret Scanner initialized successfully")
+			appLogger.Info(ctx, "Secret Scanner initialized successfully")
 		}
 	}
 
@@ -132,7 +176,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 		}
 	}
 
-	appLogger.Info(ctx, "agent_start", "🦆 DuckOps Agent initialized successfully")
+	appLogger.Info(ctx, "🦆 DuckOps Agent initialized successfully")
 	return &App{
 		Kernel:   k,
 		Sessions: tracker,
@@ -157,7 +201,7 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 
 	llmRegistry, err := application.NewLLMRegistry(sharedCfg)
 	if err != nil {
-		appLogger.ErrorErr(context.Background(), "agent_start", err, "Failed to initialize LLM Registry")
+		appLogger.ErrorErr(context.Background(), err, "Failed to initialize LLM Registry")
 		log.Fatalf("Failed to initialize LLM Registry: %v", err)
 	}
 
@@ -167,7 +211,7 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 			context.Background(), prov.APIKey, prov.Model,
 		)
 		if err != nil {
-			appLogger.ErrorErr(context.Background(), "agent_start", err, "Warning: Gemini init failed")
+			appLogger.ErrorErr(context.Background(), err, "Warning: Gemini init failed")
 		} else {
 			llmRegistry.Register(geminiAdapter)
 		}
@@ -178,20 +222,27 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 
 // registerTools registers all agent tools with the kernel.
 func registerTools(k *kernel.Kernel, deps kernel.Dependencies, tracker *sa.Tracker, registry *sa.CapabilityRegistry, appLogger shared_ports.Logger) {
+	// Setup Hexagonal Task Engine Middleware Pipeline
+	osTranslator := translator.NewOSTranslatorAdapter("") // default to current OS
+	osExecutor := executor.NewOSExecAdapter(appLogger)
+	taskWarden := security.NewTaskWardenAdapter(deps.Warden, appLogger)
+
+	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, osExecutor, appLogger)
+
 	tools := []struct {
 		name string
 		err  error
 	}{
 		{"chat", k.RegisterTool(chat.NewChatTool(deps.LLM))},
-		{"echo", k.RegisterTool(echo.NewEchoTool())},
 		{"scan", k.RegisterTool(scan.NewScanTool(deps.LLM, deps.Memory))},
-		{"subagent", k.RegisterTool(subagent_tool.NewSubagentTool(tracker))},
-		{"resume", k.RegisterTool(subagent_tool.NewResumeTool(tracker))},
+		{"subagent", k.RegisterTool(subagent.NewSubagentTool(tracker))},
+		{"resume", k.RegisterTool(subagent.NewResumeTool(tracker))},
 		{"delegate", k.RegisterTool(delegate.NewDelegateTool(tracker, registry))},
+		{"terminal", k.RegisterTool(terminal.NewTerminalTool(taskDispatcher))},
 	}
 	for _, t := range tools {
 		if t.err != nil {
-			appLogger.ErrorErr(context.Background(), "operation_failed", t.err, "Tool registration failed", shared_ports.Field{Key: "tool", Value: t.name})
+			appLogger.ErrorErr(context.Background(), t.err, "Tool registration failed", shared_ports.Field{Key: "tool", Value: t.name})
 			log.Fatalf("%s tool registration failed: %v", t.name, t.err)
 		}
 	}

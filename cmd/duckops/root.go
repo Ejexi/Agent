@@ -27,7 +27,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "duckops",
 	Short: "DuckOps — DevSecOps AI Agent",
-	Long: `DuckOps is a standalone AI agent for DevSecOps.
+	Long: `DuckOps is a Stand Duck  AI agent for DevSecOps.
 It lives on your machine, keeps your apps running, 
 and only pings when it needs a human.`,
 	SilenceUsage: true,
@@ -46,14 +46,14 @@ and only pings when it needs a human.`,
 		}
 		srv := server.NewAgentServer(app.Sessions, addr, app.Logger)
 		go func() {
-			app.Logger.Info(context.Background(), "system_event", fmt.Sprintf("Server listening on %s", addr))
+			app.Logger.Info(context.Background(), fmt.Sprintf("Server listening on %s", addr))
 			if err := srv.Start(); err != nil {
-				app.Logger.ErrorErr(context.Background(), "operation_failed", err, "Server error")
+				app.Logger.ErrorErr(context.Background(), err, "Server error")
 			}
 		}()
 
 		// Run REPL in foreground
-		runInteractive(app.Kernel, app.Provider, "standalone")
+		runInteractive(app.Kernel, app.Provider, "Stand Duck ")
 		return nil
 	},
 }

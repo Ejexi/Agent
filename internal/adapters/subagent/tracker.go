@@ -328,12 +328,12 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 			newSessionID, retryErr := t.spawnWithRetry(parentID, originalID, config, retryCount+1)
 			if retryErr != nil {
 				if t.logger != nil {
-					t.logger.ErrorErr(session.Ctx, "operation_failed", retryErr, "Failed to spawn retry session", shared_ports.Field{Key: "original_id", Value: originalID})
+					t.logger.ErrorErr(session.Ctx, retryErr, "Failed to spawn retry session", shared_ports.Field{Key: "original_id", Value: originalID})
 				}
 				session.SetStatus(sa.StatusFailed)
 			} else {
 				if t.logger != nil {
-					t.logger.Info(session.Ctx, "system_event", "Spawned retry session",
+					t.logger.Info(session.Ctx, "Spawned retry session",
 						shared_ports.Field{Key: "new_session_id", Value: newSessionID},
 						shared_ports.Field{Key: "attempt", Value: retryCount + 1},
 						shared_ports.Field{Key: "original_id", Value: originalID})

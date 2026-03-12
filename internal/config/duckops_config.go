@@ -18,7 +18,7 @@ type DuckOpsConfig struct {
 	Settings Settings           `toml:"settings"`
 }
 
-// Profile represents a named configuration profile (e.g., "Default", "Super Mode").
+// Profile represents a named configuration profile (e.g., "Default", "Super Duck").
 type Profile struct {
 	APIEndpoint  string              `toml:"api_endpoint,omitempty"`
 	Provider     string              `toml:"provider,omitempty"`
@@ -122,6 +122,7 @@ func EnsureDuckOpsDir() (string, error) {
 	dirs := []string{
 		dir,
 		filepath.Join(dir, "data"),
+		filepath.Join(dir, "policies"),
 	}
 
 	for _, d := range dirs {
@@ -132,8 +133,17 @@ func EnsureDuckOpsDir() (string, error) {
 
 	configPath := filepath.Join(dir, "config.toml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if err := writeDefaultConfig(configPath); err != nil {
+		if err := writeDefaultConfig(configPath, dir); err != nil {
 			return "", types.Wrap(err, types.ErrCodeInternal, "failed to write default config")
+		}
+	}
+
+	// Ensure default safe policy exists
+	policyPath := filepath.Join(dir, "policies", "safe_execution.cedar")
+	if _, err := os.Stat(policyPath); os.IsNotExist(err) {
+		defaultCedar := "// Default Safe Execution Policy\nALLOW command \"ls\"\nALLOW command \"dir\"\nALLOW command \"pwd\"\nALLOW command \"cd\"\nALLOW command \"echo\"\nALLOW command \"cat\"\nALLOW command \"type\"\nALLOW command \"git\"\nALLOW command \"mkdir\"\nALLOW command \"rm\"\nALLOW command \"del\"\nALLOW command \"grep\"\nALLOW command \"findstr\"\n"
+		if err := os.WriteFile(policyPath, []byte(defaultCedar), 0600); err != nil {
+			return "", types.Wrap(err, types.ErrCodeInternal, "failed to write default safe policy")
 		}
 	}
 
@@ -141,7 +151,8 @@ func EnsureDuckOpsDir() (string, error) {
 }
 
 // writeDefaultConfig creates the initial config.toml with sensible defaults.
-func writeDefaultConfig(path string) error {
+func writeDefaultConfig(path string, duckopsDir string) error {
+	policyPath := filepath.Join(duckopsDir, "policies", "safe_execution.cedar")
 	cfg := DuckOpsConfig{
 		Profiles: map[string]Profile{
 			"default": {
@@ -160,7 +171,8 @@ func writeDefaultConfig(path string) error {
 				},
 				Warden: &WardenConfig{
 					Enabled:     true,
-					DefaultDeny: false,
+					DefaultDeny: true,
+					PolicyFiles: []string{policyPath},
 				},
 				Secrets: &SecretsConfig{
 					Enabled: true,
@@ -175,7 +187,7 @@ func writeDefaultConfig(path string) error {
 			CollectTelemetry: false,
 			Editor:           "nano",
 			ServerAddr:       ":8090",
-			AgentMode:        "standalone",
+			AgentMode:        "Stand Duck ",
 			APIGatewayURL:    "http://localhost:8080",
 		},
 	}

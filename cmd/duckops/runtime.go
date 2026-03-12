@@ -34,13 +34,47 @@ func runInteractive(k *kernel.Kernel, provider, mode string) {
 			return
 		}
 
-		task := domain.Task{
-			ID:   fmt.Sprintf("repl_%d", os.Getpid()),
-			Tool: "chat",
-			Args: map[string]interface{}{
-				"prompt":      input,
-				"ai_provider": provider,
-			},
+		// Detect if this is a raw shell command to bypass the LLM
+		isShellCommand := false
+		shellCommands := []string{"ls", "cd", "pwd", "cat", "echo", "mkdir", "rm", "git", "go", "docker", "kubectl", "dir", "type"}
+		
+		cmdParts := strings.Fields(input)
+		if len(cmdParts) > 0 {
+			for _, sc := range shellCommands {
+				if cmdParts[0] == sc {
+					isShellCommand = true
+					break
+				}
+			}
+		}
+
+		var task domain.Task
+		if isShellCommand {
+			// Extract command and args
+			command := cmdParts[0]
+			var args []string
+			if len(cmdParts) > 1 {
+				args = cmdParts[1:]
+			}
+
+			task = domain.Task{
+				ID:   fmt.Sprintf("repl_%d", os.Getpid()),
+				Tool: "terminal",
+				Args: map[string]interface{}{
+					"command": command,
+					"args":    args,
+					"cwd":     "", // the pipeline handles this
+				},
+			}
+		} else {
+			task = domain.Task{
+				ID:   fmt.Sprintf("repl_%d", os.Getpid()),
+				Tool: "chat",
+				Args: map[string]interface{}{
+					"prompt":      input,
+					"ai_provider": provider,
+				},
+			}
 		}
 
 		result, err := k.Execute(context.Background(), task)
@@ -49,7 +83,21 @@ func runInteractive(k *kernel.Kernel, provider, mode string) {
 			continue
 		}
 
-		// Extract the response text
+		if isShellCommand {
+			// Print directly like a real terminal
+			if stdout, ok := result.Data["stdout"].(string); ok && stdout != "" {
+				fmt.Print(stdout)
+			}
+			if stderr, ok := result.Data["stderr"].(string); ok && stderr != "" {
+				fmt.Print(stderr)
+			}
+			if !result.Success {
+				fmt.Printf("\n\033[31mCommand failed: %s\033[0m\n", result.Error)
+			}
+			continue
+		}
+
+		// Extract the response text for Chat tool
 		if resp, ok := result.Data["response"].(string); ok {
 			fmt.Printf("\n\033[32m[%s]\033[0m\n\033[32m%s\033[0m\n", strings.ToUpper(string(shared_domain.RoleAssistant)), resp)
 			continue

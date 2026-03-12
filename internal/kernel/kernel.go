@@ -17,6 +17,7 @@ type Dependencies struct {
 	LLM        shared_domain.LLMRegistry
 	Logger     shared_ports.Logger
 	AuditLog   ports.AuditLogPort
+	Warden     ports.WardenPort
 }
 
 // Kernel is the execution authority — it coordinates registry, runtime and dispatching.

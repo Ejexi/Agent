@@ -80,8 +80,49 @@ func (w *Warden) Evaluate(_ context.Context, req security.NetworkRequest) (secur
 	}
 
 	return security.PolicyDecision{
-		Allowed: true,
+		Allowed: false,
 		Reasons: []string{"No matching policy found, default allow"},
+	}, nil
+}
+
+// EvaluateExecution checks a local OS execution request against Cedar policies.
+func (w *Warden) EvaluateExecution(_ context.Context, req security.ExecutionRequest) (security.PolicyDecision, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// Assign ID if missing
+	if req.ID == "" {
+		req.ID = uuid.New().String()
+	}
+
+	// Evaluate policies in priority order
+	for _, policy := range w.policies {
+		if !policy.Enabled {
+			continue
+		}
+
+		matched, allowed := evaluateCedarExecutionPolicy(policy, req)
+		if matched {
+			decision := security.PolicyDecision{
+				Allowed:  allowed,
+				PolicyID: policy.ID,
+				Reasons:  []string{fmt.Sprintf("Matched execution policy: %s (%s)", policy.Name, policy.ID)},
+			}
+			return decision, nil
+		}
+	}
+
+	// No policy matched
+	if w.defaultDeny {
+		return security.PolicyDecision{
+			Allowed: false,
+			Reasons: []string{"No matching execution policy found, default deny is active"},
+		}, nil
+	}
+
+	return security.PolicyDecision{
+		Allowed: false,
+		Reasons: []string{"No matching execution policy found, default allow"},
 	}, nil
 }
 
@@ -269,6 +310,60 @@ func evaluateCedarPolicy(policy security.NetworkPolicy, req security.NetworkRequ
 			kv := strings.SplitN(value, ":", 2)
 			if len(kv) == 2 {
 				matches = req.Headers[strings.TrimSpace(kv[0])] == strings.TrimSpace(kv[1])
+			}
+		case "all":
+			matches = true
+		}
+
+		if matches {
+			return true, action == "ALLOW"
+		}
+	}
+
+	return false, false
+}
+
+// evaluateCedarExecutionPolicy provides a naive Go-native evaluation for execution requests.
+// Supports: ALLOW command "ls"
+// DENY command "rm"
+// ALLOW dir_prefix "/var/log"
+func evaluateCedarExecutionPolicy(policy security.NetworkPolicy, req security.ExecutionRequest) (matched bool, allowed bool) {
+	body := strings.TrimSpace(policy.CedarBody)
+	lines := strings.Split(body, "\n")
+
+	// Get cwd safely
+	cwd := ""
+	if c, ok := req.Context["cwd"].(string); ok {
+		cwd = c
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			continue
+		}
+
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) < 3 {
+			continue
+		}
+
+		action := strings.ToUpper(parts[0])    // ALLOW or DENY
+		predicate := strings.ToLower(parts[1]) // command, dir_prefix, arg_contains
+		value := strings.Trim(parts[2], "\"'") // value to match
+
+		var matches bool
+		switch predicate {
+		case "command":
+			matches = strings.EqualFold(req.Command, value)
+		case "dir_prefix":
+			matches = strings.HasPrefix(cwd, value)
+		case "arg_contains":
+			for _, arg := range req.Args {
+				if strings.Contains(arg, value) {
+					matches = true
+					break
+				}
 			}
 		case "all":
 			matches = true
