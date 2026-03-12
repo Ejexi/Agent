@@ -10,113 +10,105 @@ import (
 	shared_ports "github.com/SecDuckOps/shared/ports"
 )
 
-// Dispatcher coordinates the execution of an OSTask.
-// It acts as the Application Service pipeline:
-// Translator -> Security Gate -> Audit -> Executor
+// Dispatcher coordinates the execution of an OSTask using a middleware pipeline.
 type Dispatcher struct {
-	translator ports.OSTranslatorPort
-	security   ports.SecurityGatePort
-	executor   ports.CommandExecutorPort
-	logger     shared_ports.Logger
+	pipeline TaskHandler
+	logger   shared_ports.Logger
 }
 
-// NewDispatcher creates a new task dispatcher pipeline.
+// NewDispatcher creates a new task dispatcher with a middleware-based pipeline.
 func NewDispatcher(
-	t ports.OSTranslatorPort, 
-	s ports.SecurityGatePort, 
+	t ports.OSTranslatorPort,
+	s ports.SecurityGatePort,
 	e ports.CommandExecutorPort,
 	l shared_ports.Logger,
 ) *Dispatcher {
+	// 1. Base handler: The final step that actually executes the OS command.
+	base := func(ctx context.Context, task *domain.OSTask) domain.OSTaskResult {
+		if e == nil {
+			return domain.OSTaskResult{
+				Status: domain.StatusFailed,
+				Error:  fmt.Errorf("no command executor configured"),
+			}
+		}
+		execResult, err := e.Execute(ctx, *task)
+		return domain.OSTaskResult{
+			Stdout:   execResult.Stdout,
+			Stderr:   execResult.Stderr,
+			ExitCode: execResult.ExitCode,
+			Data:     execResult.Data,
+			Error:    err,
+		}
+	}
+
+	// 2. Translation Middleware: Maps generic commands to OS-specific equivalents.
+	translateMW := func(next TaskHandler) TaskHandler {
+		return func(ctx context.Context, task *domain.OSTask) domain.OSTaskResult {
+			if t != nil {
+				task.OriginalCmd, task.Args = t.Translate(task.OriginalCmd, task.Args)
+			}
+			return next(ctx, task)
+		}
+	}
+
+	// 3. Security Middleware: Enforces Warden policies and sanitization.
+	securityMW := func(next TaskHandler) TaskHandler {
+		return func(ctx context.Context, task *domain.OSTask) domain.OSTaskResult {
+			if s != nil {
+				if err := s.Evaluate(ctx, *task); err != nil {
+					return domain.OSTaskResult{
+						Status: domain.StatusFailed,
+						Error:  err,
+					}
+				}
+			}
+			return next(ctx, task)
+		}
+	}
+
+	// 4. Observability Middleware: Handles logging, timing, and error tracking.
+	observabilityMW := func(next TaskHandler) TaskHandler {
+		return func(ctx context.Context, task *domain.OSTask) domain.OSTaskResult {
+			start := time.Now()
+			if l != nil {
+				l.Debug(ctx, "TaskPipeline: Execution started", shared_ports.Field{Key: "cmd", Value: task.OriginalCmd})
+			}
+
+			res := next(ctx, task)
+
+			res.DurationMs = time.Since(start).Milliseconds()
+			if l != nil {
+				if res.Error != nil {
+					l.ErrorErr(ctx, res.Error, "TaskPipeline: Execution failed")
+				}
+				l.Debug(ctx, "TaskPipeline: Execution finished",
+					shared_ports.Field{Key: "status", Value: res.Status},
+					shared_ports.Field{Key: "duration_ms", Value: res.DurationMs},
+				)
+			}
+			return res
+		}
+	}
+
+	// Order: Observability -> Translation -> Security -> Base (Execution)
+	// (Note: Security comes after Translation to allow it to inspect the final OS-specific command)
 	return &Dispatcher{
-		translator: t,
-		security:   s,
-		executor:   e,
-		logger:     l,
+		pipeline: ChainMiddleware(base, observabilityMW, translateMW, securityMW),
+		logger:   l,
 	}
 }
 
-// Submit executes the OSTask through the established pipeline.
-// It guarantees that no command reaches the Executor without passing
-// the Translator and the Security Gate.
+// Submit executes the OSTask through the established middleware pipeline.
 func (d *Dispatcher) Submit(ctx context.Context, task domain.OSTask) domain.OSTaskResult {
-	start := time.Now()
-	
-	result := domain.OSTaskResult{
-		Status: domain.StatusRunning,
-	}
+	result := d.pipeline(ctx, &task)
 
-	if d.logger != nil {
-		d.logger.Debug(ctx, "TaskPipeline: Step 1 - Translating", shared_ports.Field{Key: "cmd", Value: task.OriginalCmd})
-	}
-
-	// 1. Translation
-	// Convert standard LLM commands ("ls", "cat") to OS-specific commands.
-	if d.translator != nil {
-		task.OriginalCmd, task.Args = d.translator.Translate(task.OriginalCmd, task.Args)
-	}
-
-	if d.logger != nil {
-		d.logger.Debug(ctx, "TaskPipeline: Step 2 - Evaluating Security", shared_ports.Field{Key: "translated_cmd", Value: task.OriginalCmd})
-	}
-
-	// 2. Security Gate (Sanitization & Warden Policy Check)
-	if d.security != nil {
-		if err := d.security.Evaluate(ctx, task); err != nil {
-			// Failed security check
+	// Consolidate final status if not set by middlewares
+	if result.Status == "" {
+		if result.Error != nil {
 			result.Status = domain.StatusFailed
-			result.Error = fmt.Errorf("security policy violation: %w", err)
-			result.ExitCode = -1
-			result.DurationMs = time.Since(start).Milliseconds()
-			
-			if d.logger != nil {
-				d.logger.ErrorErr(ctx, result.Error, "TaskPipeline: Security Blocked Command")
-			}
-			return result
+		} else {
+			result.Status = domain.StatusCompleted
 		}
-	}
-
-	if d.logger != nil {
-		d.logger.Debug(ctx, "TaskPipeline: Step 3 - Executing", shared_ports.Field{Key: "cmd", Value: task.OriginalCmd})
-	}
-
-	// 3. Execution Phase
-	if d.executor == nil {
-		result.Status = domain.StatusFailed
-		result.Error = fmt.Errorf("no command executor configured")
-		result.ExitCode = -1
-		result.DurationMs = time.Since(start).Milliseconds()
-		return result
-	}
-
-	// Run the executable command
-	execResult, err := d.executor.Execute(ctx, task)
-	
-	// Merge the execution result
-	result.Stdout = execResult.Stdout
-	result.Stderr = execResult.Stderr
-	result.ExitCode = execResult.ExitCode
-	result.Data = execResult.Data
-	result.Error = err
-
-	// Determine final task status
-	if err != nil {
-		result.Status = domain.StatusFailed
-		if ctx.Err() == context.DeadlineExceeded {
-			result.Status = domain.StatusTimedOut
-		} else if ctx.Err() == context.Canceled {
-			result.Status = domain.StatusCancelled
-		}
-	} else {
-		result.Status = domain.StatusCompleted
-	}
-
-	result.DurationMs = time.Since(start).Milliseconds()
-
-	if d.logger != nil {
-		d.logger.Debug(ctx, "TaskPipeline: Finished", 
-			shared_ports.Field{Key: "status", Value: result.Status},
-			shared_ports.Field{Key: "duration_ms", Value: result.DurationMs},
-		)
 	}
 
 	return result

@@ -55,8 +55,8 @@ func (t *OSTranslatorAdapter) translateForWindows(cmd string, args []string) (st
 		return cmd, args
 	}
 
-	// For built-ins (dir, type, del), we MUST run them through cmd.exe /c
-	newArgs := []string{"/c", mappedCmd}
+	// For built-ins (dir, type, del), we run them through powershell.exe -Command
+	newArgs := []string{"-Command", mappedCmd}
 	
 	// Convert some common UNIX flags to Windows flags where possible.
 	// This is basic for now; complex flag translation requires a deeper engine.
@@ -77,5 +77,16 @@ func (t *OSTranslatorAdapter) translateForWindows(cmd string, args []string) (st
 		newArgs = append(newArgs, arg)
 	}
 
-	return "cmd.exe", newArgs
+	return "powershell.exe", newArgs
+}
+
+// Normalize unwraps platform-specific command wrappers to extract the intended command.
+func (t *OSTranslatorAdapter) Normalize(cmd string, args []string) (string, []string) {
+	if strings.EqualFold(cmd, "cmd.exe") && len(args) >= 2 && strings.EqualFold(args[0], "/c") {
+		return args[1], args[2:]
+	}
+	if strings.EqualFold(cmd, "powershell.exe") && len(args) >= 2 && strings.EqualFold(args[0], "-Command") {
+		return args[1], args[2:]
+	}
+	return cmd, args
 }

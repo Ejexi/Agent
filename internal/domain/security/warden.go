@@ -19,12 +19,14 @@ type NetworkRequest struct {
 
 // ExecutionRequest represents a local OS command captured by the Task Engine Middleware.
 type ExecutionRequest struct {
-	ID        string                 `json:"id"`
-	Command   string                 `json:"command"`
-	Args      []string               `json:"args"`
-	Context   map[string]interface{} `json:"context"` // e.g. Cwd, Environment variables
-	SessionID string                 `json:"session_id"`
-	Timestamp time.Time              `json:"timestamp"`
+	ID                string                 `json:"id"`
+	Command           string                 `json:"command"`
+	Args              []string               `json:"args"`
+	NormalizedCommand string                 `json:"normalized_command,omitempty"`
+	NormalizedArgs    []string               `json:"normalized_args,omitempty"`
+	Context           map[string]interface{} `json:"context"` // e.g. Cwd, Environment variables
+	SessionID         string                 `json:"session_id"`
+	Timestamp         time.Time              `json:"timestamp"`
 }
 
 // PolicyDecision is the result of evaluating a Cedar policy against a request.

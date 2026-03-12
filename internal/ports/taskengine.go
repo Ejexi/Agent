@@ -10,6 +10,7 @@ import (
 // into the platform-specific equivalent (e.g. converting "ls" to "cmd.exe /c dir" on Windows).
 type OSTranslatorPort interface {
 	Translate(cmd string, args []string) (string, []string)
+	Normalize(cmd string, args []string) (string, []string)
 }
 
 // SecurityGatePort is responsible for validating the safety of an OSTask.

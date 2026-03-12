@@ -15,8 +15,9 @@ import (
 // It intercepts every command passing through the Task Engine Pipeline
 // and enforces both static sanitization rules and dynamic Cedar policies.
 type TaskWardenAdapter struct {
-	warden ports.WardenPort
-	logger shared_ports.Logger
+	warden     ports.WardenPort
+	normalizer ports.CommandNormalizer
+	logger     shared_ports.Logger
 
 	// Static configuration
 	allowlist map[string]bool
@@ -24,13 +25,13 @@ type TaskWardenAdapter struct {
 }
 
 // NewTaskWardenAdapter creates a new security gate.
-func NewTaskWardenAdapter(w ports.WardenPort, l shared_ports.Logger) ports.SecurityGatePort {
+func NewTaskWardenAdapter(w ports.WardenPort, n ports.CommandNormalizer, l shared_ports.Logger) ports.SecurityGatePort {
 	// A basic allowlist of completely safe or heavily controlled commands
 	safeCmds := []string{
 		"ls", "dir", "cat", "type", "pwd", "cd", 
 		"grep", "findstr", "git", "echo", "mkdir", "rm", "del",
 		"tfsec", "trivy", "semgrep", "gitleaks",
-		"cmd.exe", // allowed but heavily audited/sanitized below
+		"cmd.exe", "powershell.exe", // allowed but heavily audited/sanitized below
 	}
 	
 	allowMap := make(map[string]bool)
@@ -47,10 +48,11 @@ func NewTaskWardenAdapter(w ports.WardenPort, l shared_ports.Logger) ports.Secur
 	}
 
 	return &TaskWardenAdapter{
-		warden:    w,
-		logger:    l,
-		allowlist: allowMap,
-		blocklist: blocked,
+		warden:     w,
+		normalizer: n,
+		logger:     l,
+		allowlist:  allowMap,
+		blocklist:  blocked,
 	}
 }
 
@@ -76,12 +78,20 @@ func (g *TaskWardenAdapter) Evaluate(ctx context.Context, task domain.OSTask) er
 	}
 
 	// 3. Cedar Policy Engine Check (via Warden)
-	// We ask Warden if the Agent Role is allowed to perform an ExecAction on the target Resource.
-	// We pass the Command as an Attribute for fine-grained Cedar policies.
 	if g.warden != nil {
+		evalCmd := task.OriginalCmd
+		evalArgs := task.Args
+
+		// Use the normalizer to unwrap shell-specific wrappers
+		if g.normalizer != nil {
+			evalCmd, evalArgs = g.normalizer.Normalize(evalCmd, evalArgs)
+		}
+
 		req := security.ExecutionRequest{
-			Command: task.OriginalCmd,
-			Args:    task.Args,
+			Command:           task.OriginalCmd,
+			Args:              task.Args,
+			NormalizedCommand: evalCmd,
+			NormalizedArgs:    evalArgs,
 			Context: map[string]interface{}{
 				"cwd": task.Cwd,
 			},

@@ -225,7 +225,7 @@ func registerTools(k *kernel.Kernel, deps kernel.Dependencies, tracker *sa.Track
 	// Setup Hexagonal Task Engine Middleware Pipeline
 	osTranslator := translator.NewOSTranslatorAdapter("") // default to current OS
 	osExecutor := executor.NewOSExecAdapter(appLogger)
-	taskWarden := security.NewTaskWardenAdapter(deps.Warden, appLogger)
+	taskWarden := security.NewTaskWardenAdapter(deps.Warden, osTranslator, appLogger)
 
 	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, osExecutor, appLogger)
 

@@ -355,11 +355,19 @@ func evaluateCedarExecutionPolicy(policy security.NetworkPolicy, req security.Ex
 		var matches bool
 		switch predicate {
 		case "command":
-			matches = strings.EqualFold(req.Command, value)
+			cmdToCheck := req.Command
+			if req.NormalizedCommand != "" {
+				cmdToCheck = req.NormalizedCommand
+			}
+			matches = strings.EqualFold(cmdToCheck, value)
 		case "dir_prefix":
 			matches = strings.HasPrefix(cwd, value)
 		case "arg_contains":
-			for _, arg := range req.Args {
+			argsToCheck := req.Args
+			if len(req.NormalizedArgs) > 0 {
+				argsToCheck = req.NormalizedArgs
+			}
+			for _, arg := range argsToCheck {
 				if strings.Contains(arg, value) {
 					matches = true
 					break
