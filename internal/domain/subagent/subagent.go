@@ -29,6 +29,7 @@ const (
 	EventRetry    EventType = "retry"
 	EventPaused   EventType = "paused"
 	EventResumed  EventType = "resumed"
+	EventThought  EventType = "thought" // Used for AI "Thinking" and educational logs
 )
 
 // PauseReason describes why a subagent paused.
@@ -139,6 +140,7 @@ type Subagent struct {
 	RetryCount  int            `json:"retry_count"`
 	PauseInfo   *PauseInfo     `json:"pause_info,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
+	Depth       int            `json:"depth"` // Recursion depth (0 = root)
 	StartedAt   *time.Time     `json:"started_at,omitempty"`
 	CompletedAt *time.Time     `json:"completed_at,omitempty"`
 }

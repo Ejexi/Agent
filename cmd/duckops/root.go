@@ -57,7 +57,7 @@ and only pings when it needs a human.`,
 			// Run REPL in foreground
 			runInteractive(app.Kernel, app.Provider, "Stand Duck ")
 		} else {
-			runTUI(app.Kernel, app.Model)
+			runTUI(app.Kernel, app.Model, app.AppSessions, app.EventBus)
 		}
 		return nil
 	},

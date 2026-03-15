@@ -2,12 +2,14 @@ package tui
 
 import (
 	"context"
-	"github.com/SecDuckOps/agent/internal/gui/tui/components"
-	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/SecDuckOps/agent/internal/domain/subagent"
+	"github.com/SecDuckOps/agent/internal/engine"
+	"github.com/SecDuckOps/agent/internal/gui/tui/components"
+	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/shlex"
 )
@@ -33,13 +35,25 @@ type toastDismissMsg struct{}
 
 func (m model) runAgent(userInput string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := m.engine.Chat(context.Background(), userInput)
-		return agentResponseMsg{
-			content: result.Content,
-			usage:   result.Usage,
-			model:   result.Model,
-			err:     err,
+		ch, err := m.engine.StreamChat(context.Background(), userInput)
+		if err != nil {
+			return agentResponseMsg{err: err}
 		}
+		return agentStreamMsg{ch: ch}
+	}
+}
+
+type agentStreamMsg struct {
+	ch <-chan any
+}
+
+func waitForAgentEvent(ch <-chan any) tea.Cmd {
+	return func() tea.Msg {
+		evt, ok := <-ch
+		if !ok {
+			return nil // Stream closed
+		}
+		return evt
 	}
 }
 
@@ -78,8 +92,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case agentStreamMsg:
+		m.lastStreamCh = msg.ch
+		return m, waitForAgentEvent(msg.ch)
 
-	// ── Agent response ──────────────────────────────────────────────
+	case subagent.SubagentEvent:
+		m.messages = append(m.messages, Message{
+			Type:      LearningMsg,
+			Content:   msg.Message,
+			Sender:    "DuckOps",
+			Timestamp: msg.Timestamp,
+		})
+		m.scroll = 0
+		m.stayAtBottom = true
+		return m, waitForAgentEvent(m.lastStreamCh)
+
+	// ── Agent response (Final Result) ────────────────────────────────
+	case engine.ChatResult:
+		m.isProcessing = false
+		m.loading = false
+		m.messages = append(m.messages, Message{
+			Type:      AgentMsg,
+			Content:   msg.Content,
+			Sender:    "DuckOps",
+			Timestamp: time.Now(),
+		})
+		
+		// Update telemetry
+		m.totalUsage.PromptTokens += msg.Usage.PromptTokens
+		m.totalUsage.CompletionTokens += msg.Usage.CompletionTokens
+		m.totalUsage.TotalTokens += msg.Usage.TotalTokens
+		if msg.Model != "" {
+			m.activeModel = msg.Model
+		}
+		m.scroll = 0
+		m.stayAtBottom = true
+		return m, nil
+
 	case agentResponseMsg:
 		m.isProcessing = false
 		m.loading = false
@@ -90,24 +139,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Sender:    "DuckOps",
 				Timestamp: time.Now(),
 			})
-		} else {
-			m.messages = append(m.messages, Message{
-				Type:      AgentMsg,
-				Content:   msg.content,
-				Sender:    "DuckOps",
-				Timestamp: time.Now(),
-			})
-			
-			// Update telemetry
-			m.totalUsage.PromptTokens += msg.usage.PromptTokens
-			m.totalUsage.CompletionTokens += msg.usage.CompletionTokens
-			m.totalUsage.TotalTokens += msg.usage.TotalTokens
-			if msg.model != "" {
-				m.activeModel = msg.model
-			}
 		}
-		m.scroll = 0
-		m.stayAtBottom = true
+		return m, nil
+
+	case error: // Catch-all for engine errors in stream
+		m.isProcessing = false
+		m.loading = false
+		m.messages = append(m.messages, Message{
+			Type:      ErrorMsg,
+			Content:   "Engine Error: " + msg.Error(),
+			Sender:    "DuckOps",
+			Timestamp: time.Now(),
+		})
 		return m, nil
 
 	// ── Toast dismiss ───────────────────────────────────────────────

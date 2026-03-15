@@ -9,6 +9,7 @@ import (
 
 	"github.com/SecDuckOps/agent/internal/engine"
 	"github.com/SecDuckOps/agent/internal/gui/tui/terminal"
+	"github.com/SecDuckOps/agent/internal/ports"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -26,6 +27,7 @@ const (
 	AgentMsg
 	SystemMsg
 	ErrorMsg
+	LearningMsg
 )
 
 // Message represents a single chat message in the conversation.
@@ -135,8 +137,9 @@ type model struct {
 	activeModel  string
 	totalUsage   shared_domain.TokenUsage
 
-	// Mouse
-	mouseEnabled bool
+	// Session & Events (Phase 1 Enhancements)
+	appSessionManager ports.AppSessionManager
+	eventBus          ports.EventBusPort
 
 	// Shell
 	shellActive bool
@@ -152,10 +155,13 @@ type model struct {
 
 	// Paste Handling
 	submitPending bool
+
+	// Stream tracking
+	lastStreamCh <-chan any
 }
 
 // NewModel creates an initialised model with the given terminal capabilities.
-func NewModel(caps terminal.TerminalCapabilities, modelName string) model {
+func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionManager ports.AppSessionManager, eventBus ports.EventBusPort) model {
 	// ── Textarea ────────────────────────────────────────────────────
 	ta := textarea.New()
 	ta.Placeholder = "Type a message or ! for commands"
@@ -233,6 +239,8 @@ func NewModel(caps terminal.TerminalCapabilities, modelName string) model {
 		mode:               ChatMode,
 		logo:               logo,
 		dynamicSuggestions: eng.GetSuggestions(context.Background()),
+		appSessionManager:  appSessionManager,
+		eventBus:           eventBus,
 	}
 }
 

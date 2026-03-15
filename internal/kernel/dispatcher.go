@@ -34,7 +34,7 @@ func (d *Dispatcher) Start(ctx context.Context, inTopic, outTopic string) error 
 	// The bus adapter handles deserialization — we receive a clean domain.Task
 	err := d.bus.Subscribe(ctx, inTopic, func(task domain.Task) {
 		// Construct a system-level ExecutionContext for bus-dispatched tasks
-		execCtx := NewExecutionContext(ctx, "system:dispatcher", nil)
+		execCtx := NewExecutionContext(ctx, task.SessionID, "system:dispatcher", nil)
 
 		result, err := d.runtime.Execute(execCtx, task)
 		if err != nil && d.logger != nil {

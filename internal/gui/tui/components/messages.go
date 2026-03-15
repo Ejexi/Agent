@@ -52,10 +52,11 @@ type ChatMessage struct {
 
 // ChatMessage type constants (mirror model-level enum w/o import cycle).
 const (
-	ChatUser   = 0
-	ChatAgent  = 1
-	ChatSystem = 2
-	ChatError  = 3
+	ChatUser     = 0
+	ChatAgent    = 1
+	ChatSystem   = 2
+	ChatError    = 3
+	ChatLearning = 4
 )
 
 // ── Adaptive message colours ────────────────────────────────────────
@@ -64,9 +65,10 @@ var (
 	userMsgAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#555555"}
 	agentAccent   = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#34D399"}
 	systemAccent  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
-	errorAccent   = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#FF6B6B"}
-	textColor     = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
-	mutedColor    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
+	errorAccent    = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#FF6B6B"}
+	learningAccent = lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#6B7280"}
+	textColor      = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
+	mutedColor     = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 )
 
 // RenderMessageArea renders the full messages area at the given dimensions.
@@ -158,6 +160,8 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 		accent = systemAccent
 	case ChatError:
 		accent = errorAccent
+	case ChatLearning:
+		accent = learningAccent
 	default:
 		accent = textColor
 	}
@@ -173,7 +177,14 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 	if msg.Type == ChatUser {
 		sentCue = " " + lipgloss.NewStyle().Foreground(accent).Render("✓")
 	}
-	header := fmt.Sprintf("%s  %s%s", senderStyle.Render(msg.Sender), timeStyle.Render(timeStr), sentCue)
+
+	var header string
+	if msg.Type == ChatLearning {
+		// Learning messages have a more compact header
+		header = fmt.Sprintf("%s", lipgloss.NewStyle().Foreground(accent).Italic(true).Render("Step..."))
+	} else {
+		header = fmt.Sprintf("%s  %s%s", senderStyle.Render(msg.Sender), timeStyle.Render(timeStr), sentCue)
+	}
 
 	var renderedBody string
 	if isPureShell {
@@ -191,11 +202,20 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 			Render(cleanContent)
 	} else {
 		// Status line indicator (Glow style) for normal messages
+		indicator := "│"
+		if msg.Type == ChatLearning {
+			indicator = "•"
+		}
 		indicatorStyle := lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, false, false, true).
+			Border(lipgloss.NormalBorder(), false, false, false, msg.Type != ChatLearning).
 			BorderForeground(accent).
 			PaddingLeft(2)
-		renderedBody = indicatorStyle.Render(body)
+		
+		if msg.Type == ChatLearning {
+			renderedBody = lipgloss.NewStyle().Foreground(accent).Italic(true).Render(indicator + " " + body)
+		} else {
+			renderedBody = indicatorStyle.Render(body)
+		}
 	}
 
 	res := lipgloss.JoinVertical(lipgloss.Left, header, renderedBody)

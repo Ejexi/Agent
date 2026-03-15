@@ -12,12 +12,12 @@ import (
 
 // Runtime handles the execution of tools.
 type Runtime struct {
-	registry *Registry
+	registry ports.ToolRegistry
 	auditLog ports.AuditLogPort
 }
 
 // NewRuntime creates a new runtime.
-func NewRuntime(registry *Registry, auditLog ports.AuditLogPort) *Runtime {
+func NewRuntime(registry ports.ToolRegistry, auditLog ports.AuditLogPort) *Runtime {
 	return &Runtime{
 		registry: registry,
 		auditLog: auditLog,
@@ -35,14 +35,14 @@ func (r *Runtime) Execute(ctx *ExecutionContext, task domain.Task) (domain.Resul
 		}, err
 	}
 
-	tool, exists := r.registry.Get(task.Tool)
-	if !exists {
-		err := types.Newf(types.ErrCodeToolNotFound, "tool not found: %s", task.Tool)
+	tool, err := r.registry.GetTool(ctx, task.Tool)
+	if err != nil {
+		appErr := types.Newf(types.ErrCodeToolNotFound, "tool not found: %s", task.Tool)
 		return domain.Result{
 			TaskID:  task.ID,
 			Success: false,
-			Error:   err.Error(),
-		}, err
+			Error:   appErr.Error(),
+		}, appErr
 	}
 
 	// Security Policy Enforcement: Verify task capability requirements

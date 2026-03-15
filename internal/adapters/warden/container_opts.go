@@ -28,7 +28,7 @@ func buildContainerConfig(opts ports.ScanOpts, resolvedImage string) (*container
 		Tty:          false,
 		AttachStdout: true,
 		AttachStderr: true,
-		WorkingDir:   "/workspace",      // Enforced working directory inside container
+		WorkingDir:   "/scan/workspace",      // Enforced working directory inside container
 	}
 
 	hostCfg := &container.HostConfig{
@@ -52,8 +52,8 @@ func buildContainerConfig(opts ports.ScanOpts, resolvedImage string) (*container
 			{
 				Type:     mount.TypeBind,
 				Source:   targetAbs,
-				Target:   "/workspace",
-				ReadOnly: true, // Target directory is ALWAYS read-only
+				Target:   "/scan/workspace", // Updated: Target directory is ALWAYS read-only
+				ReadOnly: true,              // Target directory is ALWAYS read-only
 			},
 		},
 	}

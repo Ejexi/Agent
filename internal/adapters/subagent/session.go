@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -70,29 +71,17 @@ func downgradeModel(model string) string {
 	return model
 }
 
+//go:embed duckops_rules.md
+var duckopsSystemPrompt string
+
 // buildSystemPrompt creates the system prompt with 4-tuple context.
 func (a *SessionActor) buildSystemPrompt() string {
 	config := a.session.Subagent.Config
 
 	// Build base prompt
 	var prompt strings.Builder
-	prompt.WriteString("You are Duckops, an expert DevOps Agent running in a terminal interface. You have deep knowledge of cloud infrastructure, CI/CD, automation, monitoring, and system reliability. Your role is to analyze problems, think through solutions, research technology documentation, and help users solve their problems efficiently within the constraints of a command-line environment.\n\n")
-	
-	prompt.WriteString("# Core Principles\n")
-	prompt.WriteString("- Analyze the problem thoroughly before proposing solutions\n")
-	prompt.WriteString("- Do your research properly in official docs when in doubt or when asked about recent or fresh information\n")
-	prompt.WriteString("- Document all generated values and important configuration details\n")
-	prompt.WriteString("- Avoid assumptions - always confirm critical decisions with the user\n")
-	prompt.WriteString("- Consider security, scalability, and maintainability in all solutions\n\n")
-
-	prompt.WriteString("# Communication Style - TERMINAL OPTIMIZED\n")
-	prompt.WriteString("You are running in a terminal interface with a senior dev personality:\n")
-	prompt.WriteString("- Pragmatic and action-oriented - cut the fluff, get to work\n")
-	prompt.WriteString("- Casual but competent - like that senior dev who actually knows their stuff\n")
-	prompt.WriteString("- Solution-focused - less ceremony, more results\n")
-	prompt.WriteString("- Skip the robotic 'I will now...' phrases\n")
-	prompt.WriteString("- Just start doing: 'Checking cluster status...'\n")
-	prompt.WriteString("- Use standard GitHub-style markdown. Functional symbols OK (✓✗⚠) but avoid decorative emojis.\n\n")
+	prompt.WriteString(duckopsSystemPrompt)
+	prompt.WriteString("\n")
 
 	prompt.WriteString(`
 === NATURAL TERMINAL EXECUTION RULES ===
@@ -129,6 +118,17 @@ If the user message is NOT a raw command, continue normal conversational reasoni
 	if config.Context != "" {
 		prompt.WriteString("\n=== CONTEXT (from previous work) ===\n")
 		prompt.WriteString(config.Context)
+		prompt.WriteString("\n")
+	}
+
+	// Depth awareness
+	if a.session.Subagent.Depth > 0 {
+		prompt.WriteString(fmt.Sprintf("\n=== HIERARCHY ===\nYou are a subagent running at depth %d. ", a.session.Subagent.Depth))
+		if a.session.Subagent.Depth < 3 {
+			prompt.WriteString("You can further delegate sub-tasks using the 'dynamic_subagent_task' tool if allowed.")
+		} else {
+			prompt.WriteString("You are at the maximum delegation depth. Do not attempt to spawn further subagents.")
+		}
 		prompt.WriteString("\n")
 	}
 
@@ -198,6 +198,7 @@ func (a *SessionActor) Run() error {
 	systemPrompt := a.buildSystemPrompt()
 	messages := []shared_domain.Message{
 		{Role: shared_domain.RoleSystem, Content: systemPrompt},
+		{Role: shared_domain.RoleAssistant, Content: "Understood. I am DuckOps, an expert DevSecOps agent. I will follow your instructions precisely, avoid fluff, and prioritize action."},
 		{Role: shared_domain.RoleUser, Content: config.Instructions},
 	}
 
@@ -205,6 +206,10 @@ func (a *SessionActor) Run() error {
 	if maxSteps <= 0 {
 		maxSteps = 30
 	}
+
+	// Memory compression threshold
+	const compressionThreshold = 25
+	const historyReserve = 10 // Last 10 messages to keep intact
 
 	a.session.Emit(sa.SubagentEvent{
 		Type:    sa.EventLog,
@@ -223,6 +228,27 @@ func (a *SessionActor) Run() error {
 			Type:    sa.EventLog,
 			Message: fmt.Sprintf("Step %d/%d", i+1, maxSteps),
 		})
+
+		// ===== Memory Compression Check =====
+		if len(messages) >= compressionThreshold {
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventLog,
+				Message: "Memory compression triggered: summarizing intermediate conversation history...",
+			})
+			compressed, err := a.compressHistory(ctx, llm, messages, historyReserve)
+			if err != nil {
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventError,
+					Message: fmt.Sprintf("Memory compression failed: %v. Continuing without compression.", err),
+				})
+			} else {
+				messages = compressed
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventLog,
+					Message: fmt.Sprintf("Memory compression successful. Current context size: %d messages.", len(messages)),
+				})
+			}
+		}
 
 		// ===== Scrub Secrets Before LLM =====
 		promptText := "No prompt generated yet"
@@ -321,9 +347,10 @@ func (a *SessionActor) Run() error {
 
 			// ===== Execute tool via Kernel =====
 			task := domain.Task{
-				ID:   tcID,
-				Tool: tc.Name,
-				Args: tc.Args,
+				ID:        tcID,
+				SessionID: a.session.Subagent.SessionID,
+				Tool:      tc.Name,
+				Args:      tc.Args,
 			}
 
 			result, execErr := a.executor.Execute(ctx, task)
@@ -417,4 +444,53 @@ func (a *SessionActor) waitForApproval(ctx context.Context, tcID string, tc *age
 		// If not explicitly approved, it's rejected
 		return false, nil
 	}
+}
+
+// compressHistory reduces message count by summarizing old context while preserving recent state.
+func (a *SessionActor) compressHistory(ctx context.Context, llm shared_domain.LLM, messages []shared_domain.Message, reserve int) ([]shared_domain.Message, error) {
+	if len(messages) <= reserve+3 {
+		return messages, nil
+	}
+
+	// 1. Keep the core setup (System, Ack, Instruction)
+	head := messages[0:3]
+
+	// 2. Extract context to summarize (the "middle")
+	midIdx := len(messages) - reserve
+	middle := messages[3:midIdx]
+	tail := messages[midIdx:]
+
+	// 3. Build summary prompt
+	var summaryText strings.Builder
+	for _, m := range middle {
+		summaryText.WriteString(fmt.Sprintf("%s: %s\n", strings.ToUpper(string(m.Role)), m.Content))
+	}
+
+	summaryMessages := []shared_domain.Message{
+		{
+			Role:    shared_domain.RoleSystem,
+			Content: "You are a specialized summarization engine. Summarize the following agent conversation history into a concise, few-paragraph narrative that preserves all key findings, tool results, and the current operational state. Focus on 'What has been done' and 'What was found'.",
+		},
+		{
+			Role:    shared_domain.RoleUser,
+			Content: fmt.Sprintf("CONVERSATION TO SUMMARIZE:\n%s", summaryText.String()),
+		},
+	}
+
+	// 4. Call LLM for summary
+	result, err := llm.Generate(ctx, summaryMessages, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Reconstruct messages: [head..., summary, tail...]
+	newMessages := make([]shared_domain.Message, 0, 3+1+len(tail))
+	newMessages = append(newMessages, head...)
+	newMessages = append(newMessages, shared_domain.Message{
+		Role:    shared_domain.RoleSystem,
+		Content: "=== PREVIOUS HISTORY SUMMARY ===\n" + result.Content + "\n================================",
+	})
+	newMessages = append(newMessages, tail...)
+
+	return newMessages, nil
 }

@@ -48,7 +48,7 @@ func (t *TerminalTool) Schema() domain.ToolSchema {
 			"command":   "string - The command name (e.g., ls, pwd, cat, git, go, etc.)",
 			"args":      "[]string - Arguments to pass to the command",
 			"cwd":       "string - Optional. Working directory (defaults to current dir)",
-			"env":       "map[string]string - Optional. Environment variables",
+			"env":       "map[string]string - Optional. Environment variables. AVOID including standard system variables unless required for the specific command.",
 			"use_pty":   "bool - Optional. Whether to use a PTY for interactive commands",
 			"cols":      "int - Optional. Terminal columns for PTY",
 			"rows":      "int - Optional. Terminal rows for PTY",

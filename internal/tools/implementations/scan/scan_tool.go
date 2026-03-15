@@ -3,32 +3,29 @@ package scan
 import (
 	"context"
 
-	"github.com/SecDuckOps/shared/llm/domain"
+	"github.com/SecDuckOps/shared/scanner/aggregator"
 	"github.com/SecDuckOps/shared/types"
 
 	agent_domain "github.com/SecDuckOps/agent/internal/domain"
-	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/tools/base"
 )
 
 // ScanParams defines the typed parameters for the scan tool.
 type ScanParams struct {
-	Target     string `json:"target"`
-	AIProvider string `json:"ai_provider"`
+	Target  string `json:"target"`
+	Scanner string `json:"scanner"`
 }
 
-// ScanTool performs LLM-powered security scans.
+// ScanTool performs security scans via DockerWarden and specific parsers.
 type ScanTool struct {
 	base.BaseTypedTool[ScanParams]
-	llmRegistry domain.LLMRegistry
-	memory      ports.MemoryPort
+	scannerSvc *aggregator.ScannerService
 }
 
 // NewScanTool creates a new ScanTool.
-func NewScanTool(llmRegistry domain.LLMRegistry, memory ports.MemoryPort) *ScanTool {
+func NewScanTool(scannerSvc *aggregator.ScannerService) *ScanTool {
 	t := &ScanTool{
-		llmRegistry: llmRegistry,
-		memory:      memory,
+		scannerSvc: scannerSvc,
 	}
 	t.Impl = t
 	return t
@@ -39,10 +36,10 @@ func (t *ScanTool) Name() string { return "scan" }
 func (t *ScanTool) Schema() agent_domain.ToolSchema {
 	return agent_domain.ToolSchema{
 		Name:        "scan",
-		Description: "Perform a security scan on a target using LLM analysis and memory storage.",
+		Description: "Perform a security scan on a target using a specific scanner engine.",
 		Parameters: map[string]string{
-			"target":      "string - The target to scan",
-			"ai_provider": "string - Optional. The AI provider to use (default: openai)",
+			"target":  "string - The directory or file to scan",
+			"scanner": "string - The scanner engine to use (e.g. 'trivy', 'semgrep', 'gitleaks', 'zap', 'tfsec', 'gosec', etc.)",
 		},
 	}
 }
@@ -55,41 +52,45 @@ func (t *ScanTool) ParseParams(input map[string]interface{}) (ScanParams, error)
 	if params.Target == "" {
 		return params, types.New(types.ErrCodeInvalidInput, "missing 'target' argument")
 	}
-	if params.AIProvider == "" {
-		params.AIProvider = "openai"
+	if params.Scanner == "" {
+		return params, types.New(types.ErrCodeInvalidInput, "missing 'scanner' argument")
 	}
 	return params, nil
 }
 
 func (t *ScanTool) Execute(ctx context.Context, params ScanParams) (agent_domain.Result, error) {
-	// Save target to memory
-	if t.memory != nil {
-		_ = t.memory.Save(ctx, "scan_target_"+params.Target, params.Target)
+	if t.scannerSvc == nil {
+		return agent_domain.Result{
+			Success: false,
+			Status:  "Docker Warden is not available",
+			Data: map[string]interface{}{
+				"error": "The scanner service is not initialized. Please ensure Docker is running and healthy.",
+			},
+		}, nil
 	}
 
-	// Analyze with LLM
-	llmReport := "Dummy LLM Report for " + params.Target
-	var usage domain.TokenUsage
-	if t.llmRegistry != nil {
-		provider := t.llmRegistry.Get(params.AIProvider)
-		if provider != nil {
-			result, err := provider.Generate(ctx, []domain.Message{
-				{Role: domain.RoleUser, Content: "Analyze this scan target: " + params.Target},
-			}, nil)
-			if err == nil {
-				llmReport = result.Content
-				usage = result.Usage
-			}
-		}
+	scanResult, err := t.scannerSvc.RunScan(ctx, params.Target, params.Scanner)
+	if err != nil {
+		return agent_domain.Result{
+			Success: false,
+			Status:  "scan execution failed",
+			Data: map[string]interface{}{
+				"error": err.Error(),
+			},
+		}, nil
 	}
 
 	return agent_domain.Result{
 		Success: true,
-		Status:  "scan completed successfully",
+		Status:  "scan completed dynamically",
 		Data: map[string]interface{}{
-			"target":     params.Target,
-			"llm_report": llmReport,
-			"usage":      usage,
+			"scan_id":      scanResult.ScanID,
+			"scanner_name": scanResult.ScannerName,
+			"target":       scanResult.Target,
+			"duration":     scanResult.Duration,
+			"error":        scanResult.Error,
+			"findings":     scanResult.Findings,
+			"raw_output":   scanResult.RawOutput,
 		},
 	}, nil
 }

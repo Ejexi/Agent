@@ -21,7 +21,7 @@ func ThinkingMiddleware(reviewer ports.ThinkingPort) TaskMiddleware {
 					// Enrich the task with the rationale
 					task.Rationale = result.Content
 					middleUsage = result.Usage
-					middleModel = "gemini-2.5-pro" // We should ideally get this from the adapter, but for now we hardcode it based on user request or detect it.
+					middleModel = "arcee-ai/trinity-large-preview:free" // We should ideally get this from the adapter, but for now we hardcode it based on user request or detect it.
 					// Actually, let's just use what comes back if we can.
 				}
 			}
@@ -56,7 +56,7 @@ func ReflectionMiddleware(reviewer ports.ThinkingPort) TaskMiddleware {
 					res.Usage.TotalTokens += result.Usage.TotalTokens
 					// Don't overwrite model if already set, but set if empty
 					if res.Model == "" {
-						res.Model = "gemini-2.5-pro"
+						res.Model = "arcee-ai/trinity-large-preview:free"
 					}
 				}
 			}

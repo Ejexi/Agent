@@ -9,16 +9,30 @@ import (
 // ExecutionContext wraps the standard context to include identity and capability grants.
 type ExecutionContext struct {
 	context.Context
+	SessionID   string
 	PrincipalID string
 	GrantedCaps []security.Capability
+	OnEvent     func(any) // Generic callback to avoid circular deps
 }
 
 // NewExecutionContext wraps an existing context with specific capabilities.
-func NewExecutionContext(ctx context.Context, principalID string, caps []security.Capability) *ExecutionContext {
+func NewExecutionContext(ctx context.Context, sessionID string, principalID string, caps []security.Capability) *ExecutionContext {
 	return &ExecutionContext{
 		Context:     ctx,
+		SessionID:   sessionID,
 		PrincipalID: principalID,
 		GrantedCaps: caps,
+	}
+}
+
+// WithEventCallback returns a copy of the context with the given event callback.
+func (c *ExecutionContext) WithEventCallback(cb func(any)) *ExecutionContext {
+	return &ExecutionContext{
+		Context:     c.Context,
+		SessionID:   c.SessionID,
+		PrincipalID: c.PrincipalID,
+		GrantedCaps: c.GrantedCaps,
+		OnEvent:     cb,
 	}
 }
 
@@ -39,4 +53,11 @@ func (c *ExecutionContext) HasCapabilities(required []security.Capability) bool 
 		}
 	}
 	return true
+}
+
+// Emit sends an event to the internal callback if set.
+func (c *ExecutionContext) Emit(event any) {
+	if c.OnEvent != nil {
+		c.OnEvent(event)
+	}
 }

@@ -164,15 +164,17 @@ func writeDefaultConfig(path string, duckopsDir string) error {
 	cfg := DuckOpsConfig{
 		Profiles: map[string]Profile{
 			"default": {
-				APIEndpoint: "http://localhost:8090",
-				Provider:    "openrouter",
+				APIEndpoint:  "https://api.secduckops.dev",
+				Provider:     "openrouter",
+				Model:        "openrouter/arcee-ai/trinity-large-preview:free",
+				RecentModels: []string{"openrouter/trinity-large-preview:free"},
 				Providers: map[string]Provider{
 					"openai": {
 						Type: "openai",
 						Auth: &ProviderAuth{Type: "env", Key: "OPENAI_API_KEY"},
 					},
 					"openrouter": {
-						Type:    "openrouter",
+						Type:    "custom",
 						BaseURL: "https://openrouter.ai/api/v1",
 						Auth:    &ProviderAuth{Type: "env", Key: "OPENROUTER_API_KEY"},
 					},
@@ -180,6 +182,12 @@ func writeDefaultConfig(path string, duckopsDir string) error {
 				Warden: &WardenConfig{
 					Enabled:     true,
 					DefaultDeny: true,
+					Volumes: []string{
+						"~/.duckops/config.toml:/home/agent/.duckops/config.toml:ro",
+						"~/.duckops/data/local.db:/home/agent/.duckops/data/local.db",
+						"./:/agent:ro",
+						"~/.aws/credentials:/home/agent/.aws/credentials:ro",
+					},
 					PolicyFiles: []string{
 						filepath.Join(duckopsDir, "policies", "safe_execution.cedar"),
 						filepath.Join(duckopsDir, "policies", "deny_execution.cedar"),
@@ -194,12 +202,14 @@ func writeDefaultConfig(path string, duckopsDir string) error {
 			},
 		},
 		Settings: Settings{
+			MachineName:      "duck-agent-01",
+			AnonymousID:      "default-uuid-for-telemetry",
 			AutoAppendIgnore: true,
-			CollectTelemetry: false,
+			CollectTelemetry: true,
 			Editor:           "nano",
 			ServerAddr:       ":8090",
 			AgentMode:        "Stand Duck",
-			APIGatewayURL:    "http://localhost:8080",
+			APIGatewayURL:    "https://api.secduckops.dev",
 		},
 	}
 

@@ -80,7 +80,7 @@ func (w *Warden) Evaluate(_ context.Context, req security.NetworkRequest) (secur
 	}
 
 	return security.PolicyDecision{
-		Allowed: false,
+		Allowed: true,
 		Reasons: []string{"No matching policy found, default allow"},
 	}, nil
 }
@@ -121,7 +121,7 @@ func (w *Warden) EvaluateExecution(_ context.Context, req security.ExecutionRequ
 	}
 
 	return security.PolicyDecision{
-		Allowed: false,
+		Allowed: true,
 		Reasons: []string{"No matching execution policy found, default allow"},
 	}, nil
 }

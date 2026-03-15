@@ -35,6 +35,11 @@ func (s *SubagentSession) Emit(evt sa.SubagentEvent) {
 	}
 
 	s.Log.Append(evt)
+
+	// Propagate to ExecutionContext if available (Phase 6: Visual Learning)
+	if e, ok := s.Ctx.(interface{ Emit(any) }); ok {
+		e.Emit(evt)
+	}
 }
 
 // SetStatus transitions the session status and emits a status_change event.
@@ -100,11 +105,21 @@ func NewTracker(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProv
 
 // SpawnSubagent creates a new session and starts the agent loop in a goroutine.
 func (t *Tracker) SpawnSubagent(parentID string, config sa.SessionConfig) (string, error) {
-	return t.spawnWithRetry(parentID, "", config, 0)
+	depth := 0
+	if parentID != "" {
+		parent, err := t.GetSession(parentID)
+		if err == nil {
+			depth = parent.Subagent.Depth + 1
+		}
+		if depth > 3 {
+			return "", types.Newf(types.ErrCodePermissionDenied, "maximum subagent depth exceeded (limit: 3) to prevent recursive runaway costs")
+		}
+	}
+	return t.spawnWithRetry(parentID, "", config, 0, depth)
 }
 
 // spawnWithRetry creates a session, optionally linked to an original session for retries.
-func (t *Tracker) spawnWithRetry(parentID string, originalID string, config sa.SessionConfig, retryCount int) (string, error) {
+func (t *Tracker) spawnWithRetry(parentID string, originalID string, config sa.SessionConfig, retryCount int, depth int) (string, error) {
 	sessionID := uuid.New().String()
 	subagentID := uuid.New().String()
 	runID := uuid.New().String()
@@ -137,6 +152,7 @@ func (t *Tracker) spawnWithRetry(parentID string, originalID string, config sa.S
 			Status:     sa.StatusPending,
 			RunState:   sa.RunStateStarting,
 			RetryCount: retryCount,
+			Depth:      depth,
 			CreatedAt:  now,
 		},
 		Log:        NewEventLog(sessionID),
@@ -324,8 +340,12 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 			if delayMs > 0 {
 				time.Sleep(time.Duration(delayMs) * time.Millisecond)
 			}
+			
+			session.mu.Lock()
+			currentDepth := session.Subagent.Depth
+			session.mu.Unlock()
 
-			newSessionID, retryErr := t.spawnWithRetry(parentID, originalID, config, retryCount+1)
+			newSessionID, retryErr := t.spawnWithRetry(parentID, originalID, config, retryCount+1, currentDepth)
 			if retryErr != nil {
 				if t.logger != nil {
 					t.logger.ErrorErr(session.Ctx, retryErr, "Failed to spawn retry session", shared_ports.Field{Key: "original_id", Value: originalID})

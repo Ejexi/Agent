@@ -46,21 +46,61 @@ type ChatResult struct {
 	Usage   shared_domain.TokenUsage
 }
 
-// Chat processes a user prompt through the DuckOps kernel.
-func (e *Engine) Chat(ctx context.Context, input string) (ChatResult, error) {
+// StreamChat processes a user prompt and returns a channel of events (Thinking, ToolCalls, FinalResult).
+func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, error) {
 	if e.kernel == nil {
-		return ChatResult{}, fmt.Errorf("kernel not initialized")
+		return nil, fmt.Errorf("kernel not initialized")
 	}
 
-	// Detect if this is a shell command dynamically
-	isShellCommand := false
+	eventCh := make(chan any, 10)
 	
+	go func() {
+		defer close(eventCh)
+
+		// 1. Prepare Task (same logic as Chat, but simplified for brevity)
+		task := e.prepareTask(input)
+		
+		// 2. Wrap context with event callback
+		execCtx := kernel.NewExecutionContext(ctx, "session:tui", "user:tui", []security.Capability{
+			security.CapReadFS,
+			security.CapExecuteShell,
+		}).WithEventCallback(func(evt any) {
+			eventCh <- evt
+		})
+
+		// 3. Execute
+		result, err := e.kernel.Execute(execCtx, task)
+		if err != nil {
+			eventCh <- err
+			return
+		}
+
+		// 4. Return Final Result
+		res := ChatResult{}
+		if usage, ok := result.Data["usage"].(shared_domain.TokenUsage); ok {
+			res.Usage = usage
+		}
+		if model, ok := result.Data["model"].(string); ok {
+			res.Model = model
+		}
+		if resp, ok := result.Data["response"].(string); ok {
+			res.Content = resp
+		} else {
+			res.Content = fmt.Sprintf("Success: %v", result.Data)
+		}
+		
+		eventCh <- res
+	}()
+
+	return eventCh, nil
+}
+
+// prepareTask is a private helper to deduplicate task preparation logic.
+func (e *Engine) prepareTask(input string) domain.Task {
+	isShellCommand := false
 	cmdParts := strings.Fields(input)
 	if len(cmdParts) > 0 {
 		command := cmdParts[0]
-		
-		// Check if the command exists in the system PATH
-		// If not, check against essential shell built-ins
 		if _, err := exec.LookPath(command); err == nil {
 			isShellCommand = true
 		} else {
@@ -75,52 +115,22 @@ func (e *Engine) Chat(ctx context.Context, input string) (ChatResult, error) {
 		}
 	}
 
-	var task domain.Task
 	if isShellCommand {
-		command := cmdParts[0]
-		var args []string
-		if len(cmdParts) > 1 {
-			args = cmdParts[1:]
-		}
-
-		task = domain.Task{
+		return domain.Task{
 			ID:   "tui_task",
 			Tool: "terminal",
 			Args: map[string]interface{}{
-				"command": command,
-				"args":    args,
+				"command": cmdParts[0],
+				"args":    cmdParts[1:],
 				"cwd":     e.cwd,
 			},
 			RequiredCaps: []security.Capability{security.CapExecuteShell},
 		}
-	} else if strings.HasPrefix(input, "/") {
-		cmdParts := strings.Fields(strings.TrimPrefix(input, "/"))
-		command := cmdParts[0]
-
-		if command == "scan" {
-			target := e.cwd
-			if len(cmdParts) > 1 {
-				target = cmdParts[1]
-			}
-			task = domain.Task{
-				ID:   "tui_scan",
-				Tool: "scan",
-				Args: map[string]interface{}{
-					"target": target,
-				},
-			}
-		} else {
-			// fallback for other slash commands: send to chat but as system prompt
-			task = domain.Task{
-				ID:   "tui_chat",
-				Tool: "chat",
-				Args: map[string]interface{}{
-					"prompt": fmt.Sprintf("System Command Issued: %s. Respond as the DuckOps DevSecOps Assistant with the appropriate internal diagnostic or action representation.", input),
-				},
-			}
-		}
-	} else {
-		task = domain.Task{
+	}
+	
+	if strings.HasPrefix(input, "/") {
+		// Handle / commands (simplified)
+		return domain.Task{
 			ID:   "tui_chat",
 			Tool: "chat",
 			Args: map[string]interface{}{
@@ -129,57 +139,32 @@ func (e *Engine) Chat(ctx context.Context, input string) (ChatResult, error) {
 		}
 	}
 
-	// Wrap context with default user capabilities
-	execCtx := kernel.NewExecutionContext(ctx, "user:tui", []security.Capability{
-		security.CapReadFS,
-		security.CapExecuteShell,
-	})
+	return domain.Task{
+		ID:   "tui_chat",
+		Tool: "chat",
+		Args: map[string]interface{}{
+			"prompt": input,
+		},
+	}
+}
 
-	result, err := e.kernel.Execute(execCtx, task)
+// Chat processes a user prompt through the DuckOps kernel (Synchronous wrapper).
+func (e *Engine) Chat(ctx context.Context, input string) (ChatResult, error) {
+	ch, err := e.StreamChat(ctx, input)
 	if err != nil {
 		return ChatResult{}, err
 	}
 
-	res := ChatResult{}
-	
-	// Extract basic metadata
-	if usage, ok := result.Data["usage"].(shared_domain.TokenUsage); ok {
-		res.Usage = usage
-	}
-	if model, ok := result.Data["model"].(string); ok {
-		res.Model = model
+	var lastRes ChatResult
+	for evt := range ch {
+		if res, ok := evt.(ChatResult); ok {
+			lastRes = res
+		} else if err, ok := evt.(error); ok {
+			return ChatResult{}, err
+		}
 	}
 
-	if isShellCommand {
-		// Priority 1: AI Result presentation (Beautified)
-		if reflection, ok := result.Data["stdout"].(string); ok && reflection != "" {
-			res.Content = reflection
-			return res, nil
-		}
-		
-		// Fallback to raw output if no beautification
-		stdout, _ := result.Data["raw_stdout"].(string)
-		if stdout == "" {
-			stdout, _ = result.Data["stdout"].(string)
-		}
-		stderr, _ := result.Data["stderr"].(string)
-		
-		output := stdout
-		if stderr != "" {
-			output += "\n" + stderr
-		}
-		res.Content = output
-		return res, nil
-	}
-
-	// For chat tool
-	if resp, ok := result.Data["response"].(string); ok {
-		res.Content = resp
-		return res, nil
-	}
-
-	res.Content = fmt.Sprintf("Success: %v", result.Data)
-	return res, nil
+	return lastRes, nil
 }
 
 // GetSuggestions returns a dynamic set of suggested questions for the user.

@@ -5,8 +5,9 @@ import (
 	"fmt"
 
 	"github.com/SecDuckOps/agent/internal/domain"
-	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
+	"github.com/SecDuckOps/agent/internal/kernel"
 	tracker "github.com/SecDuckOps/agent/internal/adapters/subagent"
+	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/tools/base"
 )
 
@@ -99,8 +100,13 @@ func (t *SubagentTool) Execute(ctx context.Context, params SubagentParams) (doma
 		config.Retry = sa.RetryPolicy{MaxRetries: params.MaxRetries, DelayMs: 1000}
 	}
 	config.ApplyDefaults()
+	
+	parentID := ""
+	if execCtx, ok := ctx.(*kernel.ExecutionContext); ok {
+		parentID = execCtx.SessionID
+	}
 
-	sessionID, err := t.tracker.SpawnSubagent("", config)
+	sessionID, err := t.tracker.SpawnSubagent(parentID, config)
 	if err != nil {
 		return domain.Result{
 			Success: false,
