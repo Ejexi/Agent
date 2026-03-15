@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/SecDuckOps/agent/internal/engine"
@@ -147,6 +149,9 @@ type model struct {
 	mode               SessionMode
 	logo               string
 	dynamicSuggestions []string
+
+	// Paste Handling
+	submitPending bool
 }
 
 // NewModel creates an initialised model with the given terminal capabilities.
@@ -162,7 +167,8 @@ func NewModel(caps terminal.TerminalCapabilities, modelName string) model {
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(Theme.Text)
 	ta.BlurredStyle.Base = lipgloss.NewStyle().Foreground(Theme.Muted)
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(Theme.Muted)
-	ta.SetHeight(3)
+	// Start with 1 line and let it automatically grow up to MaxHeight
+	ta.SetHeight(1)
 
 	// ── Spinner ─────────────────────────────────────────────────────
 	sp := spinner.New()
@@ -176,9 +182,42 @@ func NewModel(caps terminal.TerminalCapabilities, modelName string) model {
 	cwd, _ := os.Getwd()
 	eng := engine.NewEngine(cwd)
 
-	// Load logo
-	logoPath := "internal/gui/tui/assets/logo.png"
-	logo, _ := RenderImageToHalfBlocks(logoPath, 45)
+	asciiLogo := `
+██████╗ ██╗   ██╗██████╗ ██╗  ██╗ ██████╗ ██████╗ ███████╗
+██╔══██╗██║   ██║██╔════╝██║ ██╔╝██╔═══██╗██╔══██╗██╔════╝
+██║  ██║██║   ██║██║     █████╔╝ ██║   ██║██████╔╝███████╗
+██║  ██║██║   ██║██║     ██╔═██╗ ██║   ██║██╔═══╝ ╚════██║
+██████╔╝╚██████╔╝╚██████╗██║  ██╗╚██████╔╝██║     ███████║
+╚═════╝  ╚═════╝  ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚══════╝
+`
+
+	// Apply horizontal gradient
+	lines := strings.Split(asciiLogo, "\n")
+	var coloredLines []string
+	
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var coloredLine string
+		chars := []rune(line)
+		for i, char := range chars {
+			// Calculate gradient from left to right (Dark Gray to White)
+			// Start: #444444, End: #FFFFFF
+			ratio := float64(i) / float64(len(chars))
+			
+			// Color interpolation from dark gray to white
+			// To avoid being completely invisible on black terminals, we start at 0x44
+			val := int(0x44 + (0xFF-0x44)*ratio)
+			
+			hexColor := fmt.Sprintf("#%02X%02X%02X", val, val, val)
+			
+			coloredLine += lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor)).Render(string(char))
+		}
+		coloredLines = append(coloredLines, coloredLine)
+	}
+
+	logo := lipgloss.JoinVertical(lipgloss.Left, coloredLines...) + "\n"
 
 	return model{
 		caps:               caps,

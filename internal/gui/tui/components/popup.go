@@ -9,7 +9,7 @@ import (
 
 var (
 	popupBorder = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
-	popupTitle  = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	popupTitle  = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 	popupText   = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	popupMuted  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 )
@@ -51,7 +51,7 @@ func RenderShortcutsPopup(termW, termH int, isLegacy bool) string {
 	shortcuts := []struct{ key, desc string }{
 		{"Ctrl+C", "Quit Application"},
 		{"Ctrl+K", "Toggle this help"},
-		{"Tab", "Toggle side panel"},
+		{"Ctrl+B", "Toggle side panel"},
 		{"Esc", "Close current view"},
 		{"Enter", "Send message"},
 		{"Alt+Enter", "Add new line (\\n)"},

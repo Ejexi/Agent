@@ -29,6 +29,11 @@ func NewEngine(cwd string) *Engine {
 	}
 }
 
+// GetCwd returns current working directory in the engin
+func (e *Engine) GetCwd() string {
+	return e.cwd
+}
+
 // SetKernel allows injecting the initialized kernel.
 func (e *Engine) SetKernel(k *kernel.Kernel) {
 	e.kernel = k
@@ -87,6 +92,32 @@ func (e *Engine) Chat(ctx context.Context, input string) (ChatResult, error) {
 				"cwd":     e.cwd,
 			},
 			RequiredCaps: []security.Capability{security.CapExecuteShell},
+		}
+	} else if strings.HasPrefix(input, "/") {
+		cmdParts := strings.Fields(strings.TrimPrefix(input, "/"))
+		command := cmdParts[0]
+
+		if command == "scan" {
+			target := e.cwd
+			if len(cmdParts) > 1 {
+				target = cmdParts[1]
+			}
+			task = domain.Task{
+				ID:   "tui_scan",
+				Tool: "scan",
+				Args: map[string]interface{}{
+					"target": target,
+				},
+			}
+		} else {
+			// fallback for other slash commands: send to chat but as system prompt
+			task = domain.Task{
+				ID:   "tui_chat",
+				Tool: "chat",
+				Args: map[string]interface{}{
+					"prompt": fmt.Sprintf("System Command Issued: %s. Respond as the DuckOps DevSecOps Assistant with the appropriate internal diagnostic or action representation.", input),
+				},
+			}
 		}
 	} else {
 		task = domain.Task{

@@ -9,7 +9,7 @@ import (
 
 var (
 	drawerBorder = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
-	drawerTitle  = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	drawerTitle  = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 )
 
 func CommandDrawer(results []interface{}, selectedIndex int, width int, title string) string {
@@ -42,7 +42,7 @@ func CommandDrawer(results []interface{}, selectedIndex int, width int, title st
 		if i == selectedIndex {
 			style = style.
 				Foreground(lipgloss.Color("#FFFFFF")).
-				Background(lipgloss.Color("#7D56F4")).
+				Background(lipgloss.Color("#555555")).
 				Bold(true)
 		} else {
 			style = style.Foreground(lipgloss.Color("#EEEEEE"))

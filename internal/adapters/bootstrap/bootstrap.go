@@ -171,6 +171,21 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 
 	tracker := sa.NewTracker(bridge, bridge, secretScanner, appLogger)
 
+	// Initialize Docker Warden (Scanner Port)
+	var dockerWarden *warden_adapter.DockerWarden
+	if dw, err := warden_adapter.NewDockerWarden(); err != nil {
+		appLogger.ErrorErr(ctx, err, "Failed to initialize Docker Warden. Container scans will not be available.")
+	} else {
+		// Verify daemon connection
+		if err := dw.HealthCheck(ctx); err != nil {
+			appLogger.ErrorErr(ctx, err, "Docker Warden healthcheck failed. Container scans will not be available.")
+		} else {
+			dockerWarden = dw
+			appLogger.Info(ctx, "Docker Warden initialized successfully")
+		}
+	}
+	_ = dockerWarden // TODO (Sprint 4): Pass dockerWarden to scan.NewScanTool()
+
 	// Register tools
 	registerTools(k, deps, tracker, capabilityRegistry, profile, appLogger)
 

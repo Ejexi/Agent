@@ -6,8 +6,7 @@ import (
 )
 
 var (
-	inputBorderColor = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#444444"}
-	inputAccent      = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	inputAccent      = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 )
 
 // RenderInput renders the textarea inside a bordered box at the given width.

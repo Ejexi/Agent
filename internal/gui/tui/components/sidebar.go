@@ -12,7 +12,7 @@ const SidePanelWidth = 32
 
 var (
 	sidePanelBorder = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#444444"}
-	sidePanelTitle  = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	sidePanelTitle  = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#555555"}
 	sidePanelText   = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	sidePanelMuted  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 )

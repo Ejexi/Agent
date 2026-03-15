@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	headerAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	headerAccent = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 	headerText   = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	headerMuted  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 	headerBorder = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#444444"}

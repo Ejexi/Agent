@@ -124,6 +124,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.stayAtBottom {
 			m.scroll = 0
 		}
+
+		// Update textarea width to prevent weird text wrapping
+		w := m.width - 6
+		if m.showSidePanel {
+			w -= components.SidePanelWidth
+		}
+		if w < 10 {
+			w = 10
+		}
+		m.textarea.SetWidth(w)
 		
 		// Update sub-models that depend on size
 		m.shell, _ = m.shell.Update(msg)
@@ -339,6 +349,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Timestamp: time.Now(),
 			})
 			m.textarea.Reset()
+			m.textarea.SetHeight(1)
 			m.scroll = 0
 			m.stayAtBottom = true
 			m.isProcessing = true
@@ -347,7 +358,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.KeyTab:
+	case tea.KeyCtrlB:
 		m.showSidePanel = !m.showSidePanel
 		// Readjust textarea width
 		w := m.width - 6
@@ -437,6 +448,7 @@ func (m model) handleMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Timestamp: time.Now(),
 		})
 		m.textarea.Reset()
+		m.textarea.SetHeight(1)
 		m.isProcessing = true
 		m.loading = true
 		return m, tea.Batch(m.runAgent(selectedCmd), m.spinner.Tick)
@@ -487,6 +499,7 @@ func (m *model) routeShellCommand(input string) (tea.Model, tea.Cmd) {
 	})
 
 	m.textarea.Reset()
+	m.textarea.SetHeight(1)
 	m.isProcessing = true
 	m.loading = true
 	m.scroll = 0

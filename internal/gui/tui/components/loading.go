@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	loadingAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	loadingAccent = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 	loadingText   = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 )
 

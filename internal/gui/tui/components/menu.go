@@ -28,7 +28,7 @@ var (
 	menuBorder   = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 	menuText     = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	menuMuted    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
-	menuSelected = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	menuSelected = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 	menuWidth    = 46
 )
 

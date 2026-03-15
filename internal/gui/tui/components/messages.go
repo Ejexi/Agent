@@ -61,7 +61,7 @@ const (
 // ── Adaptive message colours ────────────────────────────────────────
 
 var (
-	userMsgAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}
+	userMsgAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#555555"}
 	agentAccent   = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#34D399"}
 	systemAccent  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 	errorAccent   = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#FF6B6B"}
@@ -183,7 +183,7 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 		cleanContent = strings.TrimPrefix(cleanContent, "```shell")
 		cleanContent = strings.TrimSuffix(cleanContent, "```")
 		cleanContent = strings.TrimSpace(cleanContent)
-		
+
 		// Use simple wordwrap or just keep it as is if it fits
 		renderedBody = lipgloss.NewStyle().
 			Foreground(textColor).
@@ -200,7 +200,6 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 
 	res := lipgloss.JoinVertical(lipgloss.Left, header, renderedBody)
 
-	// Render table/suggestions if present
 	if len(msg.Table) > 0 {
 		tbl := renderTable(msg.Table, contentWidth)
 		res = lipgloss.JoinVertical(lipgloss.Left, res, "", tbl)
@@ -218,7 +217,7 @@ func renderTable(rows []TableRow, width int) string {
 		return ""
 	}
 
-	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}).Bold(true)
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#555555"}).Bold(true)
 	borderStyle := lipgloss.NewStyle().Foreground(mutedColor)
 
 	tbl := table.New().
@@ -237,10 +236,6 @@ func renderTable(rows []TableRow, width int) string {
 		tbl.Row(r.Check, statusStr, r.Impact)
 	}
 
-	// Calculate widths dynamically by using table.Width if available.
-	// `table` package automatically manages column widths depending on contents,
-	// but can optionally limit width if it's too large by letting the parent container clip or applying max width.
-	// Since lipgloss tables handle layout beautifully, we can just return it.
 	return tbl.Render()
 }
 
@@ -282,8 +277,8 @@ func renderSuggestions(suggestions []string, width int) string {
 	title := titleStyle.Render("💭 You might want to ask")
 
 	chipStyle := lipgloss.NewStyle().
-		Foreground(userMsgAccent).
-		Background(lipgloss.AdaptiveColor{Light: "#F0F0F0", Dark: "#2A2A2A"}).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.AdaptiveColor{Light: "#ffffff", Dark: "#2A2A2A"}).
 		Padding(0, 1).
 		MarginRight(1).
 		MarginBottom(1)
@@ -319,30 +314,86 @@ func renderSuggestions(suggestions []string, width int) string {
 // ── Empty state ─────────────────────────────────────────────────────
 
 func renderEmptyState(width, height int, logo string, suggestions []string) string {
-	title := lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"}).
-		Bold(true).
-		Render("DuckOps AI Agent")
-
-	subtitle := lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}).
-		Render("Type a message to get started, or press / for commands")
-
-	hints := []string{
-		"  /help          Show all available commands",
-		"  /status        Show workspace status",
-		"  /scan          Manage security scans",
-		"  /clear         Clear the screen",
+	// Make it responsive but with a reasonable max width
+	innerW := width - 10
+	if innerW > 90 {
+		innerW = 90
+	}
+	if innerW < 30 {
+		innerW = 30
 	}
 
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#444444", Dark: "#666666"})
-	var hintLines []string
-	for _, h := range hints {
-		// Use a fixed width for each line to ensure they are consistent, 
-		// but JoinVertical(lipgloss.Left) on the lines is the key fix.
-		hintLines = append(hintLines, hintStyle.Render(h))
+	// Provide styles
+	textStyle := lipgloss.NewStyle().Foreground(textColor)
+	mutedStyle := lipgloss.NewStyle().Foreground(mutedColor)
+
+	modesTitle := textStyle.Render("Modes:")
+	modesList := lipgloss.JoinVertical(lipgloss.Left,
+		mutedStyle.Render("  • Type '/' to browse available commands"),
+		mutedStyle.Render("  • Type '!' to run a command directly"),
+		mutedStyle.Render("  • Type '@' to search files and directories"),
+		mutedStyle.Render("  • Or just start typing to ask the AI"),
+	)
+	modesBlock := lipgloss.JoinVertical(lipgloss.Left, modesTitle, modesList)
+
+	sepLine := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#3F3F3F"}).Render(strings.Repeat("─", innerW))
+
+	// Left Column
+	colLeftTitle := textStyle.Render("Type '/' to browse commands:")
+	leftItems := []struct{ cmd, desc string }{
+		{"/help", "Show all available commands"},
+		{"/status", "Show workspace status"},
+		{"/projects", "List accessible projects"},
+		{"/scan", "Manage security scans"},
+		{"/vuln", "View vulnerabilities"},
+		{"/clear", "Clear the screen"},
+		{"/logout", "Sign out"},
 	}
-	hintBlock := lipgloss.JoinVertical(lipgloss.Left, hintLines...)
+	var leftLines []string
+	leftLines = append(leftLines, colLeftTitle, "")
+	for _, item := range leftItems {
+		leftLines = append(leftLines, lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Foreground(textColor).Width(15).Render(item.cmd),
+			lipgloss.NewStyle().Foreground(mutedColor).Render(item.desc),
+		))
+	}
+	leftBlock := lipgloss.JoinVertical(lipgloss.Left, leftLines...)
+
+	// Right Column
+	colRightTitle := textStyle.Render("Type '!' or '@' for tools:")
+	rightItems := []struct{ cmd, desc string }{
+		{"!help", ""},
+		{"!status", ""},
+		{"!projects", ""},
+		{"!pipelines", ""},
+		{"!scan", "backend-api-service"},
+		{"!vuln", "critical"},
+		{"@main.go", "search for files"},
+	}
+	var rightLines []string
+	rightLines = append(rightLines, colRightTitle, "")
+	for _, item := range rightItems {
+		rightLines = append(rightLines, lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Foreground(textColor).Width(15).Render(item.cmd),
+			lipgloss.NewStyle().Foreground(mutedColor).Render(item.desc),
+		))
+	}
+	rightBlock := lipgloss.JoinVertical(lipgloss.Left, rightLines...)
+
+	var cols string
+	if innerW < 75 {
+		cols = lipgloss.JoinVertical(lipgloss.Left,
+			leftBlock,
+			"",
+			rightBlock,
+		)
+	} else {
+		cols = lipgloss.JoinHorizontal(lipgloss.Top,
+			leftBlock,
+			lipgloss.NewStyle().Width(8).Render(""), // 8 spaces between columns
+			rightBlock,
+		)
+	}
 
 	if len(suggestions) == 0 {
 		suggestions = []string{
@@ -352,18 +403,32 @@ func renderEmptyState(width, height int, logo string, suggestions []string) stri
 		}
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Center,
-		"",
-		logo,
-		"",
-		title,
-		subtitle,
-		"",
-		hintBlock,
-		"",
-		"",
-		renderSuggestions(suggestions, width-20),
+	var elements []string
+	// 1. Logo is the highest priority
+	elements = append(elements, lipgloss.PlaceHorizontal(innerW, lipgloss.Center, logo))
+
+	// 2. Add elements dynamically based on available terminal height
+	if height > 16 {
+		elements = append(elements, "", lipgloss.PlaceHorizontal(innerW, lipgloss.Center, modesBlock))
+	}
+
+	// Determine if cols block will fit
+	colsHeight := lipgloss.Height(cols)
+	if height > lipgloss.Height(modesBlock)+colsHeight+22 {
+		elements = append(elements, "", lipgloss.PlaceHorizontal(innerW, lipgloss.Center, sepLine), "", lipgloss.PlaceHorizontal(innerW, lipgloss.Center, cols))
+	}
+
+	if height > lipgloss.Height(modesBlock)+18 {
+		elements = append(elements, "", lipgloss.PlaceHorizontal(innerW, lipgloss.Center, sepLine), "", lipgloss.PlaceHorizontal(innerW, lipgloss.Center, renderSuggestions(suggestions, innerW)))
+	} else if height > 14 {
+		// Just squeeze in suggestions
+		elements = append(elements, "", lipgloss.PlaceHorizontal(innerW, lipgloss.Center, renderSuggestions(suggestions, innerW)))
+	}
+
+	// Wrapper for center-aligned content
+	textBlocksWrapper := lipgloss.NewStyle().Width(innerW).Render(
+		lipgloss.JoinVertical(lipgloss.Center, elements...),
 	)
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, textBlocksWrapper)
 }

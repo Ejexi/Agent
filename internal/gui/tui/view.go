@@ -35,7 +35,13 @@ func (m model) View() string {
 	inputH := components.InputHeight(m.textarea)
 	hintH := 1
 	loadingH := 1
-	header := components.HeaderView(m.width, "0.1.0", "admin")
+	
+	cwd := ""
+	if m.engine != nil {
+		cwd = m.engine.GetCwd()
+	}
+	
+	header := components.HeaderView(m.width, "0.2.0", "admin")
 	headerH := lipgloss.Height(header)
 
 	// ── Overlay/Stack Components ────────────────────────────────────
@@ -112,7 +118,7 @@ func (m model) View() string {
 		input = components.RenderInput(m.textarea, mainW, m.caps.IsLegacy, isShell)
 	}
 
-	hint := components.RenderHintBar(mainW)
+	hint := components.RenderHintBar(mainW, cwd)
 
 	// 1. Join Chat Area components
 	var chatArea string

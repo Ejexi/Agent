@@ -22,7 +22,7 @@ var Theme = struct {
 }{
 	Text:    lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"},
 	Muted:   lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"},
-	Accent:  lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9B7DFF"},
+	Accent:  lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"},
 	Secondary: lipgloss.AdaptiveColor{Light: "#00BCD4", Dark: "#88C0D0"},
 	Error:   lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#FF6B6B"},
 	Success: lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#34D399"},
