@@ -22,6 +22,8 @@ const (
 	AuditSecretScrub  AuditAction = "secret.scrubbed"
 	AuditSessionStart AuditAction = "session.start"
 	AuditSessionEnd   AuditAction = "session.end"
+	AuditPolicyDeny   AuditAction = "policy.deny"
+	AuditPolicyAllow  AuditAction = "policy.allow"
 )
 
 // AuditEntry is a single immutable log record.

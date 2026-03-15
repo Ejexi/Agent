@@ -1,5 +1,7 @@
 package security
 
+import "context"
+
 // ────────────────────────────────────
 // Secret Substitution Domain Types
 // ────────────────────────────────────
@@ -25,4 +27,10 @@ type SecretMatch struct {
 type PlaceholderMap struct {
 	SessionID string            `json:"session_id"`
 	Mappings  map[string]string `json:"-"` // placeholder → real value (never serialized)
+}
+
+// SecretProvider defines an interface to securely resolve vault references dynamically.
+// This prevents sensitive credentials from leaking into the LLM context.
+type SecretProvider interface {
+	Resolve(ctx context.Context, ref string) (string, error)
 }

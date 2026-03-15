@@ -138,12 +138,21 @@ func EnsureDuckOpsDir() (string, error) {
 		}
 	}
 
-	// Ensure default safe policy exists
-	policyPath := filepath.Join(dir, "policies", "safe_execution.cedar")
-	if _, err := os.Stat(policyPath); os.IsNotExist(err) {
-		defaultCedar := "// Default Safe Execution Policy\nALLOW command \"ls\"\nALLOW command \"dir\"\nALLOW command \"pwd\"\nALLOW command \"cd\"\nALLOW command \"echo\"\nALLOW command \"cat\"\nALLOW command \"type\"\nALLOW command \"git\"\nALLOW command \"mkdir\"\nALLOW command \"rm\"\nALLOW command \"del\"\nALLOW command \"grep\"\nALLOW command \"findstr\"\n"
-		if err := os.WriteFile(policyPath, []byte(defaultCedar), 0600); err != nil {
+	// Ensure default policies exist
+	policyDir := filepath.Join(dir, "policies")
+	safePolicyPath := filepath.Join(policyDir, "safe_execution.cedar")
+	if _, err := os.Stat(safePolicyPath); os.IsNotExist(err) {
+		defaultSafe := "// Default Safe Execution Policy\nALLOW all command\n"
+		if err := os.WriteFile(safePolicyPath, []byte(defaultSafe), 0600); err != nil {
 			return "", types.Wrap(err, types.ErrCodeInternal, "failed to write default safe policy")
+		}
+	}
+
+	denyPolicyPath := filepath.Join(policyDir, "deny_execution.cedar")
+	if _, err := os.Stat(denyPolicyPath); os.IsNotExist(err) {
+		defaultDeny := "// Default Deny Execution Policy\n// DENY command \"rm\"\n"
+		if err := os.WriteFile(denyPolicyPath, []byte(defaultDeny), 0600); err != nil {
+			return "", types.Wrap(err, types.ErrCodeInternal, "failed to write default deny policy")
 		}
 	}
 
@@ -152,7 +161,6 @@ func EnsureDuckOpsDir() (string, error) {
 
 // writeDefaultConfig creates the initial config.toml with sensible defaults.
 func writeDefaultConfig(path string, duckopsDir string) error {
-	policyPath := filepath.Join(duckopsDir, "policies", "safe_execution.cedar")
 	cfg := DuckOpsConfig{
 		Profiles: map[string]Profile{
 			"default": {
@@ -172,7 +180,10 @@ func writeDefaultConfig(path string, duckopsDir string) error {
 				Warden: &WardenConfig{
 					Enabled:     true,
 					DefaultDeny: true,
-					PolicyFiles: []string{policyPath},
+					PolicyFiles: []string{
+						filepath.Join(duckopsDir, "policies", "safe_execution.cedar"),
+						filepath.Join(duckopsDir, "policies", "deny_execution.cedar"),
+					},
 				},
 				Secrets: &SecretsConfig{
 					Enabled: true,
@@ -187,7 +198,7 @@ func writeDefaultConfig(path string, duckopsDir string) error {
 			CollectTelemetry: false,
 			Editor:           "nano",
 			ServerAddr:       ":8090",
-			AgentMode:        "Stand Duck ",
+			AgentMode:        "Stand Duck",
 			APIGatewayURL:    "http://localhost:8080",
 		},
 	}
@@ -204,6 +215,31 @@ func writeDefaultConfig(path string, duckopsDir string) error {
 // ========================
 // Config Loading
 // ========================
+
+// SaveTOML saves the DuckOps config back to ~/.duckops/config.toml.
+func (c *DuckOpsConfig) SaveTOML() error {
+	dir, err := DuckOpsDir()
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(dir, "config.toml")
+
+	data, err := toml.Marshal(c)
+	if err != nil {
+		return types.Wrap(err, types.ErrCodeInternal, "failed to serialize config to TOML")
+	}
+
+	header := []byte("# DuckOps Agent Configuration\n# Updated via interactive setup\n\n")
+	return os.WriteFile(configPath, append(header, data...), 0600)
+}
+
+// SetProfile adds or updates a profile in the config.
+func (c *DuckOpsConfig) SetProfile(name string, profile Profile) {
+	if c.Profiles == nil {
+		c.Profiles = make(map[string]Profile)
+	}
+	c.Profiles[name] = profile
+}
 
 // LoadTOML loads the DuckOps config from ~/.duckops/config.toml.
 // Auto-creates the directory and default config if missing.

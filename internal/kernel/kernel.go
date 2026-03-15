@@ -12,12 +12,14 @@ import (
 
 // Dependencies holds all external ports needed by the kernel.
 type Dependencies struct {
-	MessageBus ports.BusPort
-	Memory     ports.MemoryPort
-	LLM        shared_domain.LLMRegistry
-	Logger     shared_ports.Logger
-	AuditLog   ports.AuditLogPort
-	Warden     ports.WardenPort
+	MessageBus     ports.BusPort
+	Memory         ports.MemoryPort
+	LLM            shared_domain.LLMRegistry
+	Logger         shared_ports.Logger
+	AuditLog       ports.AuditLogPort
+	Warden         ports.WardenPort
+	ShellExecution ports.ShellExecutionPort
+	ShellLifecycle ports.ShellLifecyclePort
 }
 
 // Kernel is the execution authority — it coordinates registry, runtime and dispatching.
@@ -74,7 +76,7 @@ func (k *Kernel) SetMessageBus(bus ports.BusPort) {
 
 // Execute provides a direct way to execute a tool, mainly used by CLI.
 // Notice: Kernel is the only component allowed to execute tools.
-func (k *Kernel) Execute(ctx context.Context, task domain.Task) (domain.Result, error) {
+func (k *Kernel) Execute(ctx *ExecutionContext, task domain.Task) (domain.Result, error) {
 	if k.runtime == nil {
 		return domain.Result{}, types.New(types.ErrCodeInternal, "runtime is not .DuckOpsConfigured")
 	}
@@ -82,11 +84,19 @@ func (k *Kernel) Execute(ctx context.Context, task domain.Task) (domain.Result, 
 }
 
 // ExecuteBatch provides a way to execute multiple tools in parallel.
-func (k *Kernel) ExecuteBatch(ctx context.Context, tasks []domain.Task) ([]domain.Result, error) {
+func (k *Kernel) ExecuteBatch(ctx *ExecutionContext, tasks []domain.Task) ([]domain.Result, error) {
 	if k.runtime == nil {
 		return nil, types.New(types.ErrCodeInternal, "runtime is not .DuckOpsConfigured")
 	}
 	return k.runtime.ExecuteBatch(ctx, tasks)
+}
+
+// ExecuteCompat satisfies the ports.ToolExecutor interface using context.Context.
+// It wraps the incoming context into an ExecutionContext with system-level defaults.
+// This is used by subagents and external consumers that don't manage capabilities directly.
+func (k *Kernel) ExecuteCompat(ctx context.Context, task domain.Task) (domain.Result, error) {
+	execCtx := NewExecutionContext(ctx, "system:compat", nil) // nil caps = no restrictions
+	return k.Execute(execCtx, task)
 }
 
 // GetToolSchemas returns the schemas of all registered tools.

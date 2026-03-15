@@ -112,6 +112,11 @@ Do NOT:
 - Provide theoretical explanations about what the command does.
 - Modify arguments unless required for OS compatibility policy.
 
+If the command is a discovery/inspection command (e.g., ls, dir, pwd, git status, docker ps):
+- You SHOULD provide a brief, high-level summary of the output (e.g., "Found 5 Go files and a Dockerfile").
+- Mention anything unusual or important (e.g., "The .env file is missing").
+- Keep it concise and professional.
+
 If the command fails:
 - Return the error output.
 - Then optionally suggest a corrective command.
@@ -239,10 +244,12 @@ func (a *SessionActor) Run() error {
 		}
 
 		// ===== Call LLM =====
-		response, err := llm.Generate(ctx, messages, nil)
+		result, err := llm.Generate(ctx, messages, nil)
 		if err != nil {
 			return types.Wrapf(err, types.ErrCodeInternal, "LLM call failed on step %d", i+1)
 		}
+
+		response := result.Content
 
 		// ===== Restore Secrets After LLM =====
 		if a.secretScanner != nil && len(pm.Mappings) > 0 {

@@ -22,6 +22,7 @@ var (
 var (
 	cfgFile string
 	verbose bool
+	cliMode bool
 )
 
 var rootCmd = &cobra.Command{
@@ -52,8 +53,12 @@ and only pings when it needs a human.`,
 			}
 		}()
 
-		// Run REPL in foreground
-		runInteractive(app.Kernel, app.Provider, "Stand Duck ")
+		if cliMode {
+			// Run REPL in foreground
+			runInteractive(app.Kernel, app.Provider, "Stand Duck ")
+		} else {
+			runTUI(app.Kernel, app.Model)
+		}
 		return nil
 	},
 }
@@ -61,6 +66,7 @@ and only pings when it needs a human.`,
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.duckops/config.toml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	rootCmd.Flags().BoolVar(&cliMode, "cli", false, "launch the classic CLI REPL instead of the TUI")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(serveCmd)

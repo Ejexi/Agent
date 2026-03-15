@@ -12,8 +12,10 @@ import (
 
 // Dispatcher coordinates the execution of an OSTask using a middleware pipeline.
 type Dispatcher struct {
-	pipeline TaskHandler
-	logger   shared_ports.Logger
+	pipeline     TaskHandler
+	logger       shared_ports.Logger
+	executor     ports.CommandExecutorPort
+	securityGate ports.SecurityGatePort
 }
 
 // NewDispatcher creates a new task dispatcher with a middleware-based pipeline.
@@ -21,6 +23,7 @@ func NewDispatcher(
 	t ports.OSTranslatorPort,
 	s ports.SecurityGatePort,
 	e ports.CommandExecutorPort,
+	th ports.ThinkingPort,
 	l shared_ports.Logger,
 ) *Dispatcher {
 	// 1. Base handler: The final step that actually executes the OS command.
@@ -32,7 +35,12 @@ func NewDispatcher(
 			}
 		}
 		execResult, err := e.Execute(ctx, *task)
+		status := domain.StatusCompleted
+		if err != nil {
+			status = domain.StatusFailed
+		}
 		return domain.OSTaskResult{
+			Status:   status,
 			Stdout:   execResult.Stdout,
 			Stderr:   execResult.Stderr,
 			ExitCode: execResult.ExitCode,
@@ -45,7 +53,7 @@ func NewDispatcher(
 	translateMW := func(next TaskHandler) TaskHandler {
 		return func(ctx context.Context, task *domain.OSTask) domain.OSTaskResult {
 			if t != nil {
-				task.OriginalCmd, task.Args = t.Translate(task.OriginalCmd, task.Args)
+				t.Translate(task)
 			}
 			return next(ctx, task)
 		}
@@ -90,11 +98,12 @@ func NewDispatcher(
 		}
 	}
 
-	// Order: Observability -> Translation -> Security -> Base (Execution)
-	// (Note: Security comes after Translation to allow it to inspect the final OS-specific command)
+	// Order: Reflection -> Thinking -> Observability -> Translation -> Security -> Base (Execution)
 	return &Dispatcher{
-		pipeline: ChainMiddleware(base, observabilityMW, translateMW, securityMW),
-		logger:   l,
+		pipeline:     ChainMiddleware(base, ReflectionMiddleware(th), ThinkingMiddleware(th), observabilityMW, translateMW, securityMW),
+		logger:       l,
+		executor:     e,
+		securityGate: s,
 	}
 }
 
@@ -112,4 +121,55 @@ func (d *Dispatcher) Submit(ctx context.Context, task domain.OSTask) domain.OSTa
 	}
 
 	return result
+}
+
+// Start starts a long-running process through the pipeline (simplified, security only for now).
+func (d *Dispatcher) Start(ctx context.Context, task domain.OSTask) (string, error) {
+	// Security check
+	if d.securityGate != nil {
+		if err := d.securityGate.Evaluate(ctx, task); err != nil {
+			return "", err
+		}
+	}
+	
+	if d.executor == nil {
+		return "", fmt.Errorf("no command executor configured")
+	}
+	
+	return d.executor.Start(ctx, task)
+}
+
+func (d *Dispatcher) Kill(ctx context.Context, sessionID string) error {
+	if d.executor == nil {
+		return fmt.Errorf("no command executor configured")
+	}
+	return d.executor.Kill(ctx, sessionID)
+}
+
+func (d *Dispatcher) Resize(ctx context.Context, sessionID string, cols, rows int) error {
+	if d.executor == nil {
+		return fmt.Errorf("no command executor configured")
+	}
+	return d.executor.Resize(ctx, sessionID, cols, rows)
+}
+
+func (d *Dispatcher) Subscribe(ctx context.Context, sessionID string) (<-chan domain.ShellOutput, error) {
+	if d.executor == nil {
+		return nil, fmt.Errorf("no command executor configured")
+	}
+	return d.executor.Subscribe(ctx, sessionID)
+}
+
+func (d *Dispatcher) GetSession(ctx context.Context, sessionID string) (domain.ShellSession, error) {
+	if d.executor == nil {
+		return domain.ShellSession{}, fmt.Errorf("no command executor configured")
+	}
+	return d.executor.GetSession(ctx, sessionID)
+}
+
+func (d *Dispatcher) ListSessions(ctx context.Context) ([]domain.ShellSession, error) {
+	if d.executor == nil {
+		return nil, fmt.Errorf("no command executor configured")
+	}
+	return d.executor.ListSessions(ctx)
 }

@@ -1,5 +1,11 @@
 package domain
 
+import (
+	"time"
+
+	"github.com/SecDuckOps/shared/llm/domain"
+)
+
 // OSTask represents a low-level OS command requested by the Agent.
 // This is distinct from a Kernel Task, which is an LLM Tool Call.
 // The OSTask is what travels through the Task Engine Middleware pipeline.
@@ -8,6 +14,11 @@ type OSTask struct {
 	Args        []string
 	Cwd         string
 	Env         map[string]string // Optional environment variables
+	Rationale   string            // AI-generated reasoning before execution
+	UsePTY      bool              // Whether to use a PTY for execution
+	Cols        int               // Terminal columns
+	Rows        int               // Terminal rows
+	SessionID   string            // Optional session ID for streaming
 }
 
 // OSExecutionStatus represents the lifecycle state of an OS command.
@@ -24,13 +35,37 @@ const (
 
 // OSTaskResult is the universal output format for OS commands executed via the Task Engine.
 type OSTaskResult struct {
-	Status   OSExecutionStatus      `json:"status"`
-	Stdout   string                 `json:"stdout,omitempty"`
-	Stderr   string                 `json:"stderr,omitempty"`
-	Data     map[string]interface{} `json:"data,omitempty"` // For structured pipeline outputs
-	Error    error                  `json:"-"`              // Go internal error handling
-	ExitCode int                    `json:"exit_code"`
+	Status     OSExecutionStatus      `json:"status"`
+	Rationale  string                 `json:"rationale,omitempty"`
+	Reflection string                 `json:"reflection,omitempty"`
+	Stdout     string                 `json:"stdout,omitempty"`
+	Stderr     string                 `json:"stderr,omitempty"`
+	Data       map[string]interface{} `json:"data,omitempty"` // For structured pipeline outputs
+	Error      error                  `json:"-"`              // Go internal error handling
+	ExitCode   int                    `json:"exit_code"`
+	SessionID  string                 `json:"session_id,omitempty"` // Optional session ID for streaming
 	
 	// Metrics
-	DurationMs int64 `json:"duration_ms"`
+	DurationMs int64              `json:"duration_ms"`
+	Usage      domain.TokenUsage `json:"usage,omitempty"`
+	Model      string             `json:"model,omitempty"`
+}
+
+// ShellOutput represents a chunk of output from a shell process.
+type ShellOutput struct {
+	SessionID string    `json:"session_id"`
+	Data      []byte    `json:"data"`
+	IsStderr  bool      `json:"is_stderr"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// ShellSession represents an active or completed shell session.
+type ShellSession struct {
+	ID        string    `json:"id"`
+	Command   string    `json:"command"`
+	Args      []string  `json:"args,omitempty"`
+	Cwd       string    `json:"cwd,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	IsActive  bool      `json:"is_active"`
+	ExitCode  int       `json:"exit_code"`
 }

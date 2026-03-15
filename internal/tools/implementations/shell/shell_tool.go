@@ -28,18 +28,21 @@ type ShellParams struct {
 	Args      []string `json:"args,omitempty"`       // Arguments to pass to the command
 	Workspace string   `json:"workspace,omitempty"`  // Working directory (defaults to current)
 	Timeout   int      `json:"timeout,omitempty"`    // Timeout in seconds (default: 30)
+	UsePTY    bool     `json:"use_pty,omitempty"`    // Whether to use a PTY
 }
 
-// ShellTool executes safe OS commands via os/exec with Warden policy gating.
+// ShellTool executes safe OS commands via ShellExecutionPort with Warden policy gating.
 type ShellTool struct {
 	base.BaseTypedTool[ShellParams]
 	warden ports.WardenPort
+	shell  ports.ShellExecutionPort
 }
 
 // NewShellTool creates a new ShellTool with Warden policy enforcement.
-func NewShellTool(warden ports.WardenPort) *ShellTool {
+func NewShellTool(warden ports.WardenPort, shell ports.ShellExecutionPort) *ShellTool {
 	t := &ShellTool{
 		warden: warden,
+		shell:  shell,
 	}
 	t.Impl = t
 	return t
@@ -56,6 +59,7 @@ func (t *ShellTool) Schema() domain.ToolSchema {
 			"args":      "[]string - Arguments and flags to pass to the command",
 			"workspace": "string - Optional. Working directory for the command (must be within project boundaries)",
 			"timeout":   "int - Optional. Timeout in seconds (default: 30, max: 120)",
+			"use_pty":   "bool - Optional. Whether to use a PTY for interactive commands",
 		},
 	}
 }
@@ -119,45 +123,47 @@ func (t *ShellTool) Execute(ctx context.Context, params ShellParams) (domain.Res
 			return t.executePowerShell(ctx, params)
 		}
 		args = winArgs
+		binary = "cmd"
 	}
 
-	// 5. Execute with timeout
+	// 5. Execute via ShellExecutionPort
 	timeout := time.Duration(params.Timeout) * time.Second
-	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, binary, args...)
-	cmd.Dir = workspace
+	osTask := domain.OSTask{
+		OriginalCmd: binary,
+		Args:        args,
+		Cwd:         workspace,
+		UsePTY:      params.UsePTY,
+	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputBytes}
-	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputBytes}
-
-	execErr := cmd.Run()
+	shellResult, err := t.shell.Execute(ctx, osTask)
+	if err != nil {
+		return domain.Result{
+			Success: false,
+			Error:   fmt.Sprintf("command execution failed: %v", err),
+		}, nil
+	}
 
 	// Build result
 	result := domain.Result{
-		Success: execErr == nil,
+		Success: shellResult.ExitCode == 0,
 		Status:  "completed",
 		Data: map[string]interface{}{
 			"command":   params.Command,
 			"args":      params.Args,
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
-			"exit_code": 0,
+			"stdout":    shellResult.Stdout,
+			"stderr":    shellResult.Stderr,
+			"exit_code": shellResult.ExitCode,
 		},
 	}
 
-	if execErr != nil {
-		if cmdCtx.Err() == context.DeadlineExceeded {
-			result.Error = fmt.Sprintf("command timed out after %ds", params.Timeout)
-			result.Data["exit_code"] = -1
-		} else if exitErr, ok := execErr.(*exec.ExitError); ok {
-			result.Error = fmt.Sprintf("command exited with code %d", exitErr.ExitCode())
-			result.Data["exit_code"] = exitErr.ExitCode()
+	if shellResult.ExitCode != 0 {
+		if shellResult.Error != nil {
+			result.Error = shellResult.Error.Error()
 		} else {
-			result.Error = fmt.Sprintf("command execution failed: %v", execErr)
-			result.Data["exit_code"] = -1
+			result.Error = fmt.Sprintf("command exited with code %d", shellResult.ExitCode)
 		}
 	}
 

@@ -40,6 +40,7 @@ type App struct {
 	Kernel   *kernel.Kernel
 	Sessions ports.SessionManager
 	Provider string
+	Model    string
 	Logger   shared_ports.Logger
 }
 
@@ -131,11 +132,16 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 		appLogger.ErrorErr(ctx, err, "Failed to load Warden policies")
 	}
 
+	// Setup OS adapters for the kernel and dispatcher
+	osExecutor := executor.NewOSExecAdapter(appLogger)
+
 	// Kernel
 	deps := kernel.Dependencies{
-		LLM:    llmRegistry,
-		Logger: appLogger,
-		Warden: wardenInstance,
+		LLM:            llmRegistry,
+		Logger:         appLogger,
+		Warden:         wardenInstance,
+		ShellExecution: osExecutor,
+		ShellLifecycle: osExecutor,
 	}
 	k := kernel.New(deps)
 	if k == nil {
@@ -145,7 +151,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 
 	// Tracker (implements ports.SessionManager)
 	bridge := &sa.KernelBridge{
-		ExecuteFn:    k.Execute,
+		ExecuteFn:    k.ExecuteCompat,
 		GetSchemasFn: k.GetToolSchemas,
 		LLMRegistry:  llmRegistry,
 	}
@@ -166,7 +172,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 	tracker := sa.NewTracker(bridge, bridge, secretScanner, appLogger)
 
 	// Register tools
-	registerTools(k, deps, tracker, capabilityRegistry, appLogger)
+	registerTools(k, deps, tracker, capabilityRegistry, profile, appLogger)
 
 	provider := profile.Provider
 	if provider == "" {
@@ -181,6 +187,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 		Kernel:   k,
 		Sessions: tracker,
 		Provider: provider,
+		Model:    profile.Model,
 		Logger:   appLogger,
 	}
 }
@@ -221,13 +228,16 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 }
 
 // registerTools registers all agent tools with the kernel.
-func registerTools(k *kernel.Kernel, deps kernel.Dependencies, tracker *sa.Tracker, registry *sa.CapabilityRegistry, appLogger shared_ports.Logger) {
+func registerTools(k *kernel.Kernel, deps kernel.Dependencies, tracker *sa.Tracker, registry *sa.CapabilityRegistry, profile config.Profile, appLogger shared_ports.Logger) {
 	// Setup Hexagonal Task Engine Middleware Pipeline
 	osTranslator := translator.NewOSTranslatorAdapter("") // default to current OS
-	osExecutor := executor.NewOSExecAdapter(appLogger)
+	
+	// Create AI Reviewer for the Thinking phase
+	aiReviewer := security.NewAIReviewer(deps.LLM, profile.Provider, appLogger)
+	
 	taskWarden := security.NewTaskWardenAdapter(deps.Warden, osTranslator, appLogger)
 
-	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, osExecutor, appLogger)
+	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, deps.ShellExecution, aiReviewer, appLogger)
 
 	tools := []struct {
 		name string

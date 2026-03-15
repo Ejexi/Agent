@@ -19,30 +19,12 @@ type TaskWardenAdapter struct {
 	normalizer ports.CommandNormalizer
 	logger     shared_ports.Logger
 
-	// Static configuration
-	allowlist map[string]bool
 	blocklist []string // substrings to block, e.g. shell operators
 }
 
 // NewTaskWardenAdapter creates a new security gate.
 func NewTaskWardenAdapter(w ports.WardenPort, n ports.CommandNormalizer, l shared_ports.Logger) ports.SecurityGatePort {
-	// A basic allowlist of completely safe or heavily controlled commands
-	safeCmds := []string{
-		"ls", "dir", "cat", "type", "pwd", "cd", 
-		"grep", "findstr", "git", "echo", "mkdir", "rm", "del",
-		"tfsec", "trivy", "semgrep", "gitleaks",
-		"cmd.exe", "powershell.exe", // allowed but heavily audited/sanitized below
-	}
-	
-	allowMap := make(map[string]bool)
-	for _, cmd := range safeCmds {
-		allowMap[cmd] = true
-	}
-
 	// Shell metacharacters that allow command chaining or subshells.
-	// Since we execute directly via os/exec (not via bash -c), most of these
-	// are naturally neutralized by Go, but we still block them specifically
-	// if someone tries to run `cmd.exe /c` or `/bin/sh -c`
 	blocked := []string{
 		"&&", ";", "|", "||", ">", ">>", "<", "$(", "`", "!",
 	}
@@ -51,23 +33,12 @@ func NewTaskWardenAdapter(w ports.WardenPort, n ports.CommandNormalizer, l share
 		warden:     w,
 		normalizer: n,
 		logger:     l,
-		allowlist:  allowMap,
 		blocklist:  blocked,
 	}
 }
 
 // Evaluate analyzes the task and blocks execution if rules are violated.
 func (g *TaskWardenAdapter) Evaluate(ctx context.Context, task domain.OSTask) error {
-	baseCmd := strings.ToLower(task.OriginalCmd)
-
-	// 1. Check Allowlist
-	// If the user disabled the allowlist (empty map in a future dynamic config), we skip.
-	if len(g.allowlist) > 0 {
-		if !g.allowlist[baseCmd] {
-			return fmt.Errorf("command %q is not in the system allowlist", task.OriginalCmd)
-		}
-	}
-
 	// 2. Check Blocked Operators (Injection Prevention)
 	for _, arg := range task.Args {
 		for _, blocked := range g.blocklist {

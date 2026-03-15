@@ -73,7 +73,7 @@ func (t *ChatTool) Execute(ctx context.Context, params ChatParams) (agent_domain
 		}, types.Newf(types.ErrCodeNotFound, "LLM provider '%s' not found", params.AIProvider)
 	}
 
-	response, err := llm.Generate(ctx, []domain.Message{
+	result, err := llm.Generate(ctx, []domain.Message{
 		{Role: domain.RoleUser, Content: params.Prompt},
 	}, nil)
 	if err != nil {
@@ -87,7 +87,8 @@ func (t *ChatTool) Execute(ctx context.Context, params ChatParams) (agent_domain
 		Status:  "success",
 		Success: true,
 		Data: map[string]interface{}{
-			"response": response,
+			"response": result.Content,
+			"usage":    result.Usage,
 			"provider": params.AIProvider,
 		},
 	}, nil

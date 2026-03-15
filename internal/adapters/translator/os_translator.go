@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/ports"
 )
 
@@ -24,18 +25,26 @@ func NewOSTranslatorAdapter(osOverride string) ports.OSTranslatorPort {
 }
 
 // Translate converts the command and arguments.
-func (t *OSTranslatorAdapter) Translate(cmd string, args []string) (string, []string) {
+func (t *OSTranslatorAdapter) Translate(task *domain.OSTask) {
+	// 1. Argument Filtering: Remove empty strings that cause "Invalid switch" on Windows
+	filteredArgs := make([]string, 0, len(task.Args))
+	for _, arg := range task.Args {
+		if arg != "" {
+			filteredArgs = append(filteredArgs, arg)
+		}
+	}
+	task.Args = filteredArgs
+
 	if t.goos == "windows" {
-		return t.translateForWindows(cmd, args)
+		t.translateForWindows(task)
 	}
 
 	// For linux/darwin (UNIX), the command is likely already correct
-	return cmd, args
 }
 
 // translateForWindows attempts to map UNIX shell commands to
-// cmd.exe builtins or native Windows equivalents.
-func (t *OSTranslatorAdapter) translateForWindows(cmd string, args []string) (string, []string) {
+// cmd.exe builtins, powershell builtins, or native Windows equivalents.
+func (t *OSTranslatorAdapter) translateForWindows(task *domain.OSTask) {
 	// A basic alias map for LLM UNIX habits -> Windows cmd.exe built-ins
 	unixToWindows := map[string]string{
 		"ls":    "dir",
@@ -48,36 +57,44 @@ func (t *OSTranslatorAdapter) translateForWindows(cmd string, args []string) (st
 		"grep":  "findstr",
 	}
 
-	mappedCmd, exists := unixToWindows[cmd]
+	mappedCmd, exists := unixToWindows[task.OriginalCmd]
 	if !exists {
 		// If it's not a common built-in, assume it's a regular executable (like "git" or "go")
-		// We don't prepend cmd.exe for regular programs
-		return cmd, args
+		return
 	}
 
-	// For built-ins (dir, type, del), we run them through powershell.exe -Command
-	newArgs := []string{"-Command", mappedCmd}
+	// Detect UNC path (e.g. \\wsl.localhost\...). 
+	// cmd.exe /c does not support starting in a UNC directory.
+	// powershell.exe -Command does.
+	isUNC := strings.HasPrefix(task.Cwd, `\\`)
 	
+	executor := "cmd.exe"
+	executorArgs := []string{"/c", mappedCmd}
+	
+	if isUNC {
+		executor = "powershell.exe"
+		executorArgs = []string{"-Command", mappedCmd}
+	}
+
 	// Convert some common UNIX flags to Windows flags where possible.
-	// This is basic for now; complex flag translation requires a deeper engine.
-	for _, arg := range args {
-		// Clean out UNIX flags that Windows built-ins don't understand or map them
-		if cmd == "ls" {
+	for _, arg := range task.Args {
+		if task.OriginalCmd == "ls" {
 			if strings.Contains(arg, "-l") || strings.Contains(arg, "-a") {
 				continue // Skip UNIX ls flags for Windows dir
 			}
 		}
-		if cmd == "rm" {
+		if task.OriginalCmd == "rm" {
 			if strings.Contains(arg, "-r") || strings.Contains(arg, "-f") {
 				// rm -rf -> del /s /q
-				newArgs = append(newArgs, "/s", "/q")
+				executorArgs = append(executorArgs, "/s", "/q")
 				continue
 			}
 		}
-		newArgs = append(newArgs, arg)
+		executorArgs = append(executorArgs, arg)
 	}
 
-	return "powershell.exe", newArgs
+	task.OriginalCmd = executor
+	task.Args = executorArgs
 }
 
 // Normalize unwraps platform-specific command wrappers to extract the intended command.

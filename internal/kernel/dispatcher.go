@@ -33,7 +33,10 @@ func (d *Dispatcher) Start(ctx context.Context, inTopic, outTopic string) error 
 
 	// The bus adapter handles deserialization — we receive a clean domain.Task
 	err := d.bus.Subscribe(ctx, inTopic, func(task domain.Task) {
-		result, err := d.runtime.Execute(ctx, task)
+		// Construct a system-level ExecutionContext for bus-dispatched tasks
+		execCtx := NewExecutionContext(ctx, "system:dispatcher", nil)
+
+		result, err := d.runtime.Execute(execCtx, task)
 		if err != nil && d.logger != nil {
 			d.logger.ErrorErr(ctx, err, "Task execution failed", shared_ports.Field{Key: "event", Value: "operation_failed"})
 		}

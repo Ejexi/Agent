@@ -69,14 +69,16 @@ func (t *ScanTool) Execute(ctx context.Context, params ScanParams) (agent_domain
 
 	// Analyze with LLM
 	llmReport := "Dummy LLM Report for " + params.Target
+	var usage domain.TokenUsage
 	if t.llmRegistry != nil {
 		provider := t.llmRegistry.Get(params.AIProvider)
 		if provider != nil {
-			report, err := provider.Generate(ctx, []domain.Message{
+			result, err := provider.Generate(ctx, []domain.Message{
 				{Role: domain.RoleUser, Content: "Analyze this scan target: " + params.Target},
 			}, nil)
 			if err == nil {
-				llmReport = report
+				llmReport = result.Content
+				usage = result.Usage
 			}
 		}
 	}
@@ -87,6 +89,7 @@ func (t *ScanTool) Execute(ctx context.Context, params ScanParams) (agent_domain
 		Data: map[string]interface{}{
 			"target":     params.Target,
 			"llm_report": llmReport,
+			"usage":      usage,
 		},
 	}, nil
 }

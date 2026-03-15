@@ -1,7 +1,6 @@
 package kernel
 
 import (
-	"context"
 	"sync"
 	"time"
 
@@ -26,7 +25,7 @@ func NewRuntime(registry *Registry, auditLog ports.AuditLogPort) *Runtime {
 }
 
 // Execute runs a tool based on the provided task.
-func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result, error) {
+func (r *Runtime) Execute(ctx *ExecutionContext, task domain.Task) (domain.Result, error) {
 	if r.registry == nil {
 		err := types.New(types.ErrCodeInternal, "runtime registry is not initialized")
 		return domain.Result{
@@ -46,12 +45,39 @@ func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result,
 		}, err
 	}
 
+	// Security Policy Enforcement: Verify task capability requirements
+	if !ctx.HasCapabilities(task.RequiredCaps) {
+		err := types.Newf(types.ErrCodePermissionDenied, "security denial: insufficient capabilities for task %s", task.ID)
+		
+		// Log the denial
+		if r.auditLog != nil {
+			_ = r.auditLog.Record(ctx, security.AuditEntry{
+				SessionID: task.SessionID,
+				Action:    security.AuditPolicyDeny,
+				Actor:     ctx.PrincipalID,
+				Target:    task.Tool,
+				Details: map[string]interface{}{
+					"required_caps": task.RequiredCaps,
+					"granted_caps":  ctx.GrantedCaps,
+					"reason":        "capability mismatch",
+				},
+				Timestamp: time.Now(),
+			})
+		}
+
+		return domain.Result{
+			TaskID:  task.ID,
+			Success: false,
+			Error:   err.Error(),
+		}, err
+	}
+
 	// 1. Audit Log: Tool Execution Started
 	if r.auditLog != nil {
 		_ = r.auditLog.Record(ctx, security.AuditEntry{
 			SessionID: task.SessionID, // Requires SessionID on Task
 			Action:    security.AuditToolExecute,
-			Actor:     "kernel",
+			Actor:     ctx.PrincipalID,
 			Target:    task.Tool,
 			Details: map[string]interface{}{
 				"args": task.Args,
@@ -89,7 +115,7 @@ func (r *Runtime) Execute(ctx context.Context, task domain.Task) (domain.Result,
 }
 
 // ExecuteBatch runs multiple tools in parallel.
-func (r *Runtime) ExecuteBatch(ctx context.Context, tasks []domain.Task) ([]domain.Result, error) {
+func (r *Runtime) ExecuteBatch(ctx *ExecutionContext, tasks []domain.Task) ([]domain.Result, error) {
 	if r.registry == nil {
 		return nil, types.New(types.ErrCodeInternal, "runtime registry is not initialized")
 	}
