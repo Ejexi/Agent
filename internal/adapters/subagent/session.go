@@ -11,6 +11,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/agent/internal/skills"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 	"github.com/SecDuckOps/shared/types"
 )
@@ -51,28 +52,40 @@ func NewSessionActor(executor ports.ToolExecutor, schemaProvider ports.ToolSchem
 }
 
 // downgradeModel applies model cost optimization for subagents.
-// Downgrades expensive models to cheaper ones (e.g., opus → haiku, sonnet → haiku).
+// Downgrades expensive models to cheaper ones using an explicit mapping.
 func downgradeModel(model string) string {
 	if model == "" {
 		return ""
 	}
-	lower := strings.ToLower(model)
+	
+	// Exact matches or known prefix mappings (B6 Fix)
+	mapping := map[string]string{
+		"claude-3-opus-20240229":      "claude-3-haiku-20240307",
+		"claude-3-5-sonnet-20240620":  "claude-3-5-haiku-20241022",
+		"claude-3-5-sonnet-20241022":  "claude-3-5-haiku-20241022",
+		"gpt-4":                       "gpt-4o-mini",
+		"gpt-4-turbo":                 "gpt-4o-mini",
+		"gpt-4o":                      "gpt-4o-mini",
+		"openrouter/anthropic/claude-3.5-sonnet": "openrouter/anthropic/claude-3.5-haiku",
+		"openrouter/anthropic/claude-3-opus":     "openrouter/anthropic/claude-3-haiku",
+	}
 
-	if strings.Contains(lower, "opus") {
-		return strings.Replace(model, "opus", "haiku", 1)
+	if downgraded, ok := mapping[model]; ok {
+		return downgraded
 	}
-	if strings.Contains(lower, "sonnet") {
-		return strings.Replace(model, "sonnet", "haiku", 1)
+	
+	// For standard openrouter mappings matching the generic anthropic ones
+	if strings.Contains(model, "openrouter/") {
+		if strings.HasSuffix(model, "claude-3.5-sonnet") {
+			return strings.Replace(model, "sonnet", "haiku", 1)
+		}
+		if strings.HasSuffix(model, "claude-3-opus") {
+			return strings.Replace(model, "opus", "haiku", 1)
+		}
 	}
-	// GPT-4 → GPT-3.5
-	if strings.Contains(lower, "gpt-4") {
-		return "gpt-3.5-turbo"
-	}
+	
 	return model
 }
-
-//go:embed duckops_rules.md
-var duckopsSystemPrompt string
 
 // buildSystemPrompt creates the system prompt with 4-tuple context.
 func (a *SessionActor) buildSystemPrompt() string {
@@ -80,7 +93,7 @@ func (a *SessionActor) buildSystemPrompt() string {
 
 	// Build base prompt
 	var prompt strings.Builder
-	prompt.WriteString(duckopsSystemPrompt)
+	prompt.WriteString(skills.DuckOpsRules)
 	prompt.WriteString("\n")
 
 	prompt.WriteString(`
@@ -154,9 +167,11 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 }
 
 func (a *SessionActor) logRole(role shared_domain.MessageRole, format string, args ...interface{}) {
-	prefix := fmt.Sprintf("\033[35m[SUBAGENT %s | %s]\033[0m ", a.session.Subagent.SessionID[:8], strings.ToUpper(string(role)))
 	msg := fmt.Sprintf(format, args...)
-	fmt.Printf("\n%s%s\n", prefix, msg)
+	a.session.Emit(sa.SubagentEvent{
+		Type:    sa.EventLog,
+		Message: fmt.Sprintf("[%s] %s", strings.ToUpper(string(role)), msg),
+	})
 }
 
 // Run executes the full agent loop with pause-on-approval support.
@@ -217,6 +232,11 @@ func (a *SessionActor) Run() error {
 	})
 	a.logRole(shared_domain.RoleSystem, "Starting background loop (provider: %s, MaxSteps: %d)", provider, maxSteps)
 
+	// Initialization before loop
+	var lastToolName string
+	var lastToolArgsHash string
+	var identicalCallCount int
+
 	for i := 0; i < maxSteps; i++ {
 		select {
 		case <-ctx.Done():
@@ -226,7 +246,7 @@ func (a *SessionActor) Run() error {
 
 		a.session.Emit(sa.SubagentEvent{
 			Type:    sa.EventLog,
-			Message: fmt.Sprintf("Step %d/%d", i+1, maxSteps),
+			Message: fmt.Sprintf("Step %d/%d (State: Running)", i+1, maxSteps),
 		})
 
 		// ===== Memory Compression Check =====
@@ -262,10 +282,7 @@ func (a *SessionActor) Run() error {
 			scrubbed, pm = a.secretScanner.Scrub(a.session.Subagent.SessionID, promptText)
 			if scrubbed != promptText {
 				messages[len(messages)-1].Content = scrubbed
-				a.session.Emit(sa.SubagentEvent{
-					Type:    sa.EventLog,
-					Message: "Detected and scrubbed secrets from prompt before LLM call",
-				})
+				// Less noisy logging internally
 			}
 		}
 
@@ -300,6 +317,12 @@ func (a *SessionActor) Run() error {
 			a.session.Subagent.Result = parsed.Answer
 			a.session.mu.Unlock()
 			a.session.Emit(sa.SubagentEvent{Type: sa.EventResult, Message: parsed.Answer})
+			
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventLog,
+				Message: "Lifecycle: Finished → Task execution completed naturally",
+			})
+
 			a.logRole(shared_domain.RoleAssistant, "Final Answer: %s", parsed.Answer)
 			return nil
 		}
@@ -307,6 +330,45 @@ func (a *SessionActor) Run() error {
 		// ===== Tool call =====
 		if parsed.Type == "tool_call" && parsed.ToolCall != nil {
 			tc := parsed.ToolCall
+			
+			// Compute simple hash for arguments
+			argsBytes, _ := json.Marshal(tc.Args)
+			currentArgsHash := string(argsBytes)
+
+			// Termination Guard: Exactly repeating the last tool call
+			if tc.Name == lastToolName && currentArgsHash == lastToolArgsHash {
+				identicalCallCount++
+				
+				// First offense: Warn the LLM strongly
+				if identicalCallCount == 1 {
+					a.session.Emit(sa.SubagentEvent{
+						Type:    sa.EventLog,
+						Message: fmt.Sprintf("Guard triggered: Recursive loop detected. Subagent repeatedly calling '%s'. Forcing termination sequence.", tc.Name),
+					})
+					
+					messages = append(messages, shared_domain.Message{
+						Role: shared_domain.RoleAssistant, Content: response,
+					})
+					messages = append(messages, shared_domain.Message{
+						Role:    shared_domain.RoleUser,
+						Content: "SYSTEM GUARDFENCE: You have executed the exact same tool with the exact same arguments consecutively. This indicates an infinite loop. DO NOT REPEAT THIS TOOL CALL. You MUST immediately generate a 'final_answer' summarizing your findings so far, or your process will be structurally terminated.",
+					})
+					continue
+				}
+
+				// Second offense: Kill the agent completely
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventError,
+					Message: fmt.Sprintf("Fatal Guardfence: Subagent stubbornly repeated '%s' consecutive times despite warnings. Terminating.", tc.Name),
+				})
+				return types.Newf(types.ErrCodeExecutionFailed, "agent gracefully killed: infinite loop identified on tool '%s'", tc.Name)
+			}
+
+			// Update loop memory
+			lastToolName = tc.Name
+			lastToolArgsHash = currentArgsHash
+			identicalCallCount = 0
+
 			tcID := fmt.Sprintf("tc_%s_%d", a.session.Subagent.SessionID[:8], i)
 
 			a.session.Emit(sa.SubagentEvent{
@@ -329,7 +391,6 @@ func (a *SessionActor) Run() error {
 
 				if !approved {
 					// Tool rejected — inform LLM
-					// Scrub the response before appending to context (though it should be clean from LLM)
 					cleanResponse := response
 					if a.secretScanner != nil {
 						cleanResponse, _ = a.secretScanner.Scrub(a.session.Subagent.SessionID, response)
@@ -341,6 +402,9 @@ func (a *SessionActor) Run() error {
 						Role:    shared_domain.RoleUser,
 						Content: fmt.Sprintf("Tool '%s' was REJECTED by the master agent. Try a different approach.", tc.Name),
 					})
+					
+					// Rejections reset loop memory so they can retry tools safely
+					lastToolName = ""
 					continue
 				}
 			}
@@ -352,6 +416,11 @@ func (a *SessionActor) Run() error {
 				Tool:      tc.Name,
 				Args:      tc.Args,
 			}
+
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventLog,
+				Message: fmt.Sprintf("Executing tool '%s' via sandbox boundary (timeout: configured per tool)", tc.Name),
+			})
 
 			result, execErr := a.executor.Execute(ctx, task)
 
@@ -373,7 +442,7 @@ func (a *SessionActor) Run() error {
 				resultJSON, _ := json.Marshal(result.Data)
 				messages = append(messages, shared_domain.Message{
 					Role:    shared_domain.RoleUser,
-					Content: fmt.Sprintf("Tool '%s' returned: %s", tc.Name, string(resultJSON)),
+					Content: fmt.Sprintf("Tool '%s' returned: %s\n\nSYSTEM_NOTE: Evaluate the output. If the task is strictly fulfilled, emit 'final_answer'.", tc.Name, string(resultJSON)),
 				})
 				a.logRole(shared_domain.RoleTool, "Tool output received (length: %d)", len(resultJSON))
 			}

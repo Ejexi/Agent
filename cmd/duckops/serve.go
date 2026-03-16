@@ -29,7 +29,8 @@ var serveCmd = &cobra.Command{
 			return types.Wrap(err, types.ErrCodeInternal, "failed to load config")
 		}
 
-		app := bootstrap.FromTOML(tomlCfg)
+		app := bootstrap.FromTOML(context.Background(), tomlCfg)
+		defer app.Shutdown()
 
 		addr := serveAddr
 		if addr == "" {

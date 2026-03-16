@@ -28,7 +28,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "duckops",
 	Short: "DuckOps — DevSecOps AI Agent",
-	Long: `DuckOps is a Stand Duck  AI agent for DevSecOps.
+	Long: `DuckOps is a Stand Duck AI agent for DevSecOps.
 It lives on your machine, keeps your apps running, 
 and only pings when it needs a human.`,
 	SilenceUsage: true,
@@ -38,7 +38,8 @@ and only pings when it needs a human.`,
 			return types.Wrap(err, types.ErrCodeInternal, "failed to load config")
 		}
 
-		app := bootstrap.FromTOML(tomlCfg)
+		app := bootstrap.FromTOML(context.Background(), tomlCfg)
+		defer app.Shutdown()
 
 		// Start HTTP/SSE server in background
 		addr := tomlCfg.Settings.ServerAddr
@@ -55,9 +56,9 @@ and only pings when it needs a human.`,
 
 		if cliMode {
 			// Run REPL in foreground
-			runInteractive(app.Kernel, app.Provider, "Stand Duck ")
+			runInteractive(app.Kernel, app.Provider, "Stand Duck")
 		} else {
-			runTUI(app.Kernel, app.Model, app.AppSessions, app.EventBus)
+			runTUI(app.Kernel, app.Model, app.AppSessions, app.EventBus, app.SkillRegistry)
 		}
 		return nil
 	},

@@ -32,9 +32,13 @@ func (b *InMemoryEventBus) Publish(ctx context.Context, topic string, event inte
 
 	if channels, ok := b.subs[topic]; ok {
 		for _, ch := range channels {
-			go func(c chan interface{}, ev interface{}) {
-				c <- ev
-			}(ch, event)
+			select {
+			case ch <- event:
+				// Successfully sent event
+			default:
+				// Subscriber buffer full, drop event to prevent blocking publisher
+				b.logger.Info(ctx, "Event dropped: subscriber channel full", shared_ports.Field{Key: "topic", Value: topic})
+			}
 		}
 	}
 	return nil

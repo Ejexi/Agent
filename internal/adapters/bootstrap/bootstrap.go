@@ -73,10 +73,13 @@ type App struct {
 	Model        string
 	Logger       shared_ports.Logger
 	EventBus     ports.EventBusPort
+	SkillRegistry domain_skills.Registry
+	Shutdown     func()
 }
 
 // FromTOML bootstraps the application from ~/.duckops/config.toml.
-func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
+func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
+	ctx, cancel := context.WithCancel(parentCtx)
 	dir, _ := config.DuckOpsDir()
 	logPath := filepath.Join(dir, "duckops.log")
 
@@ -84,7 +87,6 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
-	ctx := context.Background()
 
 	// Initialize the EventBus
 	eventBus := events.NewInMemoryEventBus(appLogger)
@@ -129,10 +131,12 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 			defer ticker.Stop()
 			for {
 				select {
+				case <-ctx.Done():
+					return
 				case <-ticker.C:
-					cfg, err := syncAdapter.FetchRemoteConfig(context.Background())
+					cfg, err := syncAdapter.FetchRemoteConfig(ctx)
 					if err != nil {
-						appLogger.ErrorErr(context.Background(), err, "Periodic config sync failed")
+						appLogger.ErrorErr(ctx, err, "Periodic config sync failed")
 					} else {
 						capabilityRegistry.Sync(cfg.Capabilities)
 						// silent success, no need to spam logs unless changed
@@ -151,7 +155,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 	if profile.Warden != nil {
 		useDefaultDeny = profile.Warden.DefaultDeny
 	}
-	wardenInstance := warden_adapter.New(useDefaultDeny)
+	wardenInstance := warden_adapter.New(useDefaultDeny, appLogger)
 
 	// Load policies
 	var policies []domain_security.NetworkPolicy
@@ -222,17 +226,28 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 	// Initialize Docker Warden (Scanner Port)
 	var dockerWarden *warden_adapter.DockerWarden
 	
-	if dw, err := warden_adapter.NewDockerWarden(); err != nil {
-		appLogger.ErrorErr(ctx, err, "Failed to initialize Docker Warden. Container scans will not be available.")
+	dw, err := warden_adapter.NewDockerWarden()
+	if err != nil {
+		appLogger.ErrorErr(ctx, err, "Failed to initialize Docker Warden client. Container scans will not be available.")
 	} else {
 		// Verify daemon connection
 		if err := dw.HealthCheck(ctx); err != nil {
-			appLogger.ErrorErr(ctx, err, "Docker Warden healthcheck failed. Container scans will not be available.")
+			appLogger.ErrorErr(ctx, err, "Docker Warden initial healthcheck failed. Trying to start Docker automatically...")
+			
+			// Attempt to auto-start!
+			autoStartErr := warden_adapter.AutoStartDocker(ctx, appLogger, dw)
+			if autoStartErr != nil {
+				appLogger.ErrorErr(ctx, autoStartErr, "Failed to auto-start Docker. Container scans will not be available.")
+			} else {
+				dockerWarden = dw
+				appLogger.Info(ctx, "Docker Warden initialized successfully after auto-start")
+			}
 		} else {
 			dockerWarden = dw
 			appLogger.Info(ctx, "Docker Warden initialized successfully")
 		}
 	}
+	
 	// Initialize the Scanner Aggregator with all registered parsers
 	var scannerSvc *aggregator.ScannerService
 	if dockerWarden != nil {
@@ -261,7 +276,7 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 	}
 
 	// Register tools
-	registerTools(ctx, toolRegistry, deps, tracker, bridge, capabilityRegistry, profile, appLogger, scannerSvc)
+	skillRegistry := registerTools(ctx, toolRegistry, deps, tracker, bridge, capabilityRegistry, profile, appLogger, scannerSvc)
 
 	provider := profile.Provider
 	if provider == "" {
@@ -273,13 +288,15 @@ func FromTOML(tomlCfg *config.DuckOpsConfig) *App {
 
 	appLogger.Info(ctx, "🦆 DuckOps Agent initialized successfully")
 	return &App{
-		Kernel:       k,
-		Sessions:     tracker,
-		AppSessions:  appSessionManager,
-		Provider:     provider,
-		Model:        profile.Model,
-		Logger:       appLogger,
-		EventBus:     eventBus,
+		Kernel:        k,
+		Sessions:      tracker,
+		AppSessions:   appSessionManager,
+		Provider:      provider,
+		Model:         profile.Model,
+		Logger:        appLogger,
+		EventBus:      eventBus,
+		SkillRegistry: skillRegistry,
+		Shutdown:      cancel,
 	}
 }
 
@@ -321,7 +338,7 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 }
 
 // registerTools registers all agent tools with the kernel.
-func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps kernel.Dependencies, tracker *sa.Tracker, bridge *sa.KernelBridge, registry *sa.CapabilityRegistry, profile config.Profile, appLogger shared_ports.Logger, scannerSvc *aggregator.ScannerService) {
+func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps kernel.Dependencies, tracker *sa.Tracker, bridge *sa.KernelBridge, registry *sa.CapabilityRegistry, profile config.Profile, appLogger shared_ports.Logger, scannerSvc *aggregator.ScannerService) domain_skills.Registry {
 	// Setup Hexagonal Task Engine Middleware Pipeline
 	osTranslator := translator.NewOSTranslatorAdapter("") // default to current OS
 	
@@ -347,7 +364,6 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 		{"file_edit", toolRegistry.RegisterTool(ctx, file_ops.NewFileOpsTool())},
 		{"generate_report", toolRegistry.RegisterTool(ctx, reporting.NewReportingTool(deps.LLM))},
 	}
-	
 	skillRegistry, err := domain_skills.NewEmbeddedRegistry()
 	if err != nil {
 		appLogger.ErrorErr(ctx, err, "Failed to initialize embedded skill registry")
@@ -364,4 +380,6 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 			log.Fatalf("%s tool registration failed: %v", t.name, t.err)
 		}
 	}
+
+	return skillRegistry
 }

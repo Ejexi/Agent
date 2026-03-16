@@ -21,7 +21,8 @@ var runCmd = &cobra.Command{
 			return types.Wrap(err, types.ErrCodeInternal, "failed to load config")
 		}
 
-		app := bootstrap.FromTOML(tomlCfg)
+		app := bootstrap.FromTOML(context.Background(), tomlCfg)
+		defer app.Shutdown()
 
 		app.Logger.Info(context.Background(), "Starting interactive mode", shared_ports.Field{Key: "provider", Value: app.Provider})
 		runInteractive(app.Kernel, app.Provider, "Stand Duck ")

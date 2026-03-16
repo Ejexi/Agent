@@ -88,7 +88,7 @@ func (a *OSExecAdapter) Execute(ctx context.Context, task domain.OSTask) (domain
 func (a *OSExecAdapter) Start(ctx context.Context, task domain.OSTask) (string, error) {
 	sessionID := uuid.New().String()
 	
-	cmdCtx, cancel := context.WithCancel(context.Background())
+	cmdCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(cmdCtx, task.OriginalCmd, task.Args...)
 	
 	if task.Cwd != "" {
@@ -177,6 +177,13 @@ func (a *OSExecAdapter) Start(ctx context.Context, task domain.OSTask) (string, 
 		}
 		session.subs = nil
 		session.mu.Unlock()
+		
+		// B3 Fix: Prevent unbounded map growth by cleaning up session after TTL
+		time.AfterFunc(5*time.Minute, func() {
+			a.mu.Lock()
+			delete(a.sessions, sessionID)
+			a.mu.Unlock()
+		})
 	}()
 
 	return sessionID, nil

@@ -15,6 +15,8 @@ import (
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/shared/types"
 	"github.com/google/uuid"
+	shared_ports "github.com/SecDuckOps/shared/ports"
+
 )
 
 // Warden implements ports.WardenPort.
@@ -34,13 +36,15 @@ type Warden struct {
 
 	mu     sync.RWMutex
 	closed bool
+	logger shared_ports.Logger
 }
 
 // New creates a new Warden adapter.
-func New(defaultDeny bool) *Warden {
+func New(defaultDeny bool, logger shared_ports.Logger) *Warden {
 	return &Warden{
 		policies:    make([]security.NetworkPolicy, 0),
 		defaultDeny: defaultDeny,
+		logger:      logger,
 	}
 }
 
@@ -203,7 +207,7 @@ func (w *Warden) StartProxy(ctx context.Context, listenAddr string) error {
 	go func() {
 		if serveErr := w.server.Serve(w.listener); serveErr != nil && serveErr != http.ErrServerClosed {
 			// Log error — in production this would go to the audit log
-			_ = serveErr
+			w.logger.ErrorErr(ctx, serveErr, "Proxy server stopped unexpectedly")
 		}
 	}()
 

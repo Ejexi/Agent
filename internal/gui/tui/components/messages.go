@@ -14,9 +14,8 @@ import (
 // ── Markdown Rendering ─────────────────────────────────────────────
 
 func renderMarkdown(content string, width int) string {
-	// Initialize a glamour renderer with a refined style
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithStylesFromJSONBytes(GetDuckOpsTheme()),
 		glamour.WithWordWrap(width),
 		glamour.WithEmoji(),
 	)
@@ -33,12 +32,6 @@ func renderMarkdown(content string, width int) string {
 	return strings.TrimSpace(out)
 }
 
-// TableRow represents a row in the status table.
-type TableRow struct {
-	Check  string
-	Status string // "success", "warning", "failed"
-	Impact string
-}
 
 // ChatMessage is the component-level representation of a message.
 type ChatMessage struct {
@@ -46,7 +39,8 @@ type ChatMessage struct {
 	Content     string
 	Sender      string
 	Timestamp   time.Time
-	Table       []TableRow
+	TableHeaders []string
+	TableData    [][]string
 	Suggestions []string
 }
 
@@ -57,16 +51,20 @@ const (
 	ChatSystem   = 2
 	ChatError    = 3
 	ChatLearning = 4
+	ChatThought  = 5
+	ChatReflection = 6
 )
 
 // ── Adaptive message colours ────────────────────────────────────────
 
 var (
-	userMsgAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#555555"}
+	userMsgAccent = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#7D56F4"}
 	agentAccent   = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#34D399"}
 	systemAccent  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 	errorAccent    = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#FF6B6B"}
 	learningAccent = lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#6B7280"}
+	thoughtAccent  = lipgloss.AdaptiveColor{Light: "#8B5CF6", Dark: "#A78BFA"} // Purple-ish for thoughts
+	reflectAccent  = lipgloss.AdaptiveColor{Light: "#0D9488", Dark: "#2DD4BF"} // Teal for reflections
 	textColor      = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	mutedColor     = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 )
@@ -144,7 +142,7 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 	}
 
 	var body string
-	if msg.Type == ChatAgent || msg.Type == ChatError {
+	if msg.Type == ChatAgent || msg.Type == ChatError || msg.Type == ChatThought || msg.Type == ChatReflection {
 		body = renderMarkdown(msg.Content, contentWidth-4) // -4 for indicator bar + padding
 	} else {
 		body = wordwrap.String(msg.Content, contentWidth-4)
@@ -162,6 +160,10 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 		accent = errorAccent
 	case ChatLearning:
 		accent = learningAccent
+	case ChatThought:
+		accent = thoughtAccent
+	case ChatReflection:
+		accent = reflectAccent
 	default:
 		accent = textColor
 	}
@@ -182,6 +184,10 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 	if msg.Type == ChatLearning {
 		// Learning messages have a more compact header
 		header = fmt.Sprintf("%s", lipgloss.NewStyle().Foreground(accent).Italic(true).Render("Step..."))
+	} else if msg.Type == ChatThought {
+		header = fmt.Sprintf("%s", lipgloss.NewStyle().Foreground(accent).Italic(true).Render(" DuckOps is thinking..."))
+	} else if msg.Type == ChatReflection {
+		header = fmt.Sprintf("%s", lipgloss.NewStyle().Foreground(accent).Italic(true).Render(" DuckOps is reflecting..."))
 	} else {
 		header = fmt.Sprintf("%s  %s%s", senderStyle.Render(msg.Sender), timeStyle.Render(timeStr), sentCue)
 	}
@@ -205,14 +211,25 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 		indicator := "│"
 		if msg.Type == ChatLearning {
 			indicator = "•"
+		} else if msg.Type == ChatThought || msg.Type == ChatReflection {
+			indicator = "║" // Thicker border for thoughts
 		}
+
 		indicatorStyle := lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, false, false, msg.Type != ChatLearning).
+			Border(lipgloss.NormalBorder(), false, false, false, msg.Type != ChatLearning && msg.Type != ChatThought && msg.Type != ChatReflection).
 			BorderForeground(accent).
 			PaddingLeft(2)
 		
 		if msg.Type == ChatLearning {
 			renderedBody = lipgloss.NewStyle().Foreground(accent).Italic(true).Render(indicator + " " + body)
+		} else if msg.Type == ChatThought || msg.Type == ChatReflection {
+			// Thoughts get a special muted, italicized block rendering
+			thoughtBox := lipgloss.NewStyle().
+				Border(lipgloss.ThickBorder(), false, false, false, true).
+				BorderForeground(accent).
+				Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#A0A0A0"}).
+				PaddingLeft(2)
+			renderedBody = thoughtBox.Render(body)
 		} else {
 			renderedBody = indicatorStyle.Render(body)
 		}
@@ -220,8 +237,8 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 
 	res := lipgloss.JoinVertical(lipgloss.Left, header, renderedBody)
 
-	if len(msg.Table) > 0 {
-		tbl := renderTable(msg.Table, contentWidth)
+	if len(msg.TableData) > 0 {
+		tbl := renderTable(msg.TableHeaders, msg.TableData, contentWidth)
 		res = lipgloss.JoinVertical(lipgloss.Left, res, "", tbl)
 	}
 	if len(msg.Suggestions) > 0 {
@@ -232,18 +249,18 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, res, "")
 }
 
-func renderTable(rows []TableRow, width int) string {
+func renderTable(headers []string, rows [][]string, width int) string {
 	if len(rows) == 0 {
 		return ""
 	}
 
-	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#555555"}).Bold(true)
-	borderStyle := lipgloss.NewStyle().Foreground(mutedColor)
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF")).Bold(true) // Cyan headers
+	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))          // White borders
 
 	tbl := table.New().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.NormalBorder()).
 		BorderStyle(borderStyle).
-		Headers("Check", "Status", "Impact").
+		Headers(headers...).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			if row == 0 {
 				return headerStyle.Padding(0, 1) // Header row
@@ -252,8 +269,15 @@ func renderTable(rows []TableRow, width int) string {
 		})
 
 	for _, r := range rows {
-		statusStr := renderStatusBadge(r.Status)
-		tbl.Row(r.Check, statusStr, r.Impact)
+		// Only render status badges if it explicitly represents a success/warning/failed check table
+		// Hacky but safe heuristic: if it has 3 columns and headers are "Check", "Status", "Impact"
+		if len(headers) == 3 && headers[1] == "Status" && len(r) == 3 {
+			statusStr := renderStatusBadge(r[1])
+			tbl.Row(r[0], statusStr, r[2])
+		} else {
+			// Render generic dynamic rows
+			tbl.Row(r...)
+		}
 	}
 
 	return tbl.Render()

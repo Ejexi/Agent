@@ -24,7 +24,6 @@ func buildContainerConfig(opts ports.ScanOpts, resolvedImage string) (*container
 		Image:        resolvedImage,
 		Cmd:          cmd,
 		Env:          opts.Env,
-		User:         "65534:65534",     // nobody:nogroup - enforce non-root execution
 		Tty:          false,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -32,7 +31,7 @@ func buildContainerConfig(opts ports.ScanOpts, resolvedImage string) (*container
 	}
 
 	hostCfg := &container.HostConfig{
-		NetworkMode: "none",          // No network access strictly enforced
+		// NetworkMode: "none",          // Removed: Trivy and Semgrep MUST have network to fetch rules and DBs
 		Privileged:  false,           // Never run privileged
 		CapDrop:     []string{"ALL"}, // Drop all Linux capabilities
 		SecurityOpt: []string{"no-new-privileges:true"}, // Prevent privilege escalation

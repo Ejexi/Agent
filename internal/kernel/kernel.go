@@ -56,7 +56,7 @@ func New(deps Dependencies) *Kernel {
 // RegisterTool adds a new tool to the kernel's registry.
 func (k *Kernel) RegisterTool(ctx context.Context, tool domain.Tool) error {
 	if k.registry == nil {
-		return types.New(types.ErrCodeInternal, "registry is not .DuckOpsConfigured")
+		return types.New(types.ErrCodeInternal, "no execution runtime configured")
 	}
 	return k.registry.RegisterTool(ctx, tool)
 }
@@ -82,7 +82,7 @@ func (k *Kernel) SetMessageBus(bus ports.BusPort) {
 // Notice: Kernel is the only component allowed to execute tools.
 func (k *Kernel) Execute(ctx *ExecutionContext, task domain.Task) (domain.Result, error) {
 	if k.runtime == nil {
-		return domain.Result{}, types.New(types.ErrCodeInternal, "runtime is not .DuckOpsConfigured")
+		return domain.Result{}, types.New(types.ErrCodeInternal, "no dispatcher configured for background tasks")
 	}
 	return k.runtime.Execute(ctx, task)
 }
@@ -90,7 +90,7 @@ func (k *Kernel) Execute(ctx *ExecutionContext, task domain.Task) (domain.Result
 // ExecuteBatch provides a way to execute multiple tools in parallel.
 func (k *Kernel) ExecuteBatch(ctx *ExecutionContext, tasks []domain.Task) ([]domain.Result, error) {
 	if k.runtime == nil {
-		return nil, types.New(types.ErrCodeInternal, "runtime is not .DuckOpsConfigured")
+		return nil, types.New(types.ErrCodeInternal, "no execution runtime configured")
 	}
 	return k.runtime.ExecuteBatch(ctx, tasks)
 }

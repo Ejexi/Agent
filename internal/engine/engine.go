@@ -46,6 +46,20 @@ type ChatResult struct {
 	Usage   shared_domain.TokenUsage
 }
 
+// ThoughtEvent indicates the AI agent is thinking/planning before taking an action.
+type ThoughtEvent struct {
+	Rationale string
+	Usage     shared_domain.TokenUsage
+	Model     string
+}
+
+// ReflectionEvent indicates the AI agent is reflecting on an action's output.
+type ReflectionEvent struct {
+	Reflection string
+	Usage      shared_domain.TokenUsage
+	Model      string
+}
+
 // StreamChat processes a user prompt and returns a channel of events (Thinking, ToolCalls, FinalResult).
 func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, error) {
 	if e.kernel == nil {
@@ -65,6 +79,26 @@ func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, erro
 			security.CapReadFS,
 			security.CapExecuteShell,
 		}).WithEventCallback(func(evt any) {
+			
+			// Intercept cognitive steps from the middleware pipeline
+			if task, ok := evt.(domain.OSTask); ok {
+				if task.Rationale != "" {
+					eventCh <- ThoughtEvent{
+						Rationale: task.Rationale,
+						Model:     "arcee-ai/trinity-large-preview:free", // Defaulting for visual feedback
+					}
+				}
+			} else if taskResult, ok := evt.(domain.OSTaskResult); ok {
+				if taskResult.Reflection != "" {
+					eventCh <- ReflectionEvent{
+						Reflection: taskResult.Reflection,
+						Usage:      taskResult.Usage,
+						Model:      taskResult.Model,
+					}
+				}
+			}
+
+			// Still pass raw events for backwards compatibility
 			eventCh <- evt
 		})
 

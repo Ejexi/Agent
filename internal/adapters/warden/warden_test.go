@@ -9,7 +9,7 @@ import (
 )
 
 func TestWarden_EvaluateAllowPolicy(t *testing.T) {
-	w := warden.New(true) // default deny
+	w := warden.New(true, nil) // default deny
 
 	policies := []security.NetworkPolicy{
 		{
@@ -40,7 +40,7 @@ func TestWarden_EvaluateAllowPolicy(t *testing.T) {
 }
 
 func TestWarden_EvaluateDenyPolicy(t *testing.T) {
-	w := warden.New(false) // default allow
+	w := warden.New(false, nil) // default allow
 
 	policies := []security.NetworkPolicy{
 		{
@@ -68,7 +68,7 @@ func TestWarden_EvaluateDenyPolicy(t *testing.T) {
 }
 
 func TestWarden_DefaultDeny(t *testing.T) {
-	w := warden.New(true) // default deny
+	w := warden.New(true, nil) // default deny
 
 	ctx := context.Background()
 	w.LoadPolicies(ctx, nil) // no policies
@@ -86,7 +86,7 @@ func TestWarden_DefaultDeny(t *testing.T) {
 }
 
 func TestWarden_DefaultAllow(t *testing.T) {
-	w := warden.New(false) // default allow
+	w := warden.New(false, nil) // default allow
 
 	ctx := context.Background()
 	w.LoadPolicies(ctx, nil)
@@ -104,7 +104,7 @@ func TestWarden_DefaultAllow(t *testing.T) {
 }
 
 func TestWarden_MultipleRules(t *testing.T) {
-	w := warden.New(true)
+	w := warden.New(true, nil)
 
 	policies := []security.NetworkPolicy{
 		{
@@ -147,7 +147,7 @@ DENY method "PUT"`,
 }
 
 func TestWarden_DisabledPolicy(t *testing.T) {
-	w := warden.New(true)
+	w := warden.New(true, nil)
 
 	policies := []security.NetworkPolicy{
 		{
@@ -172,7 +172,7 @@ func TestWarden_DisabledPolicy(t *testing.T) {
 }
 
 func TestWarden_SourceToolFilter(t *testing.T) {
-	w := warden.New(true)
+	w := warden.New(true, nil)
 
 	policies := []security.NetworkPolicy{
 		{

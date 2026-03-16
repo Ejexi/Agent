@@ -257,7 +257,15 @@ If a user asks how to use or commands for the following topics, **you MUST immed
 
 - `subagents`: Read this skill for guidance on parallel tool execution, sandboxed environments, and writing effective prompts for child subagents.
 - `taskboard`: Read this skill for instructions on using `duckops board` (managing tickets, state, cross-session workflows).
-- `autopilot`: Read this skill for instructions on `duckops autopilot` (schedules, system services, Slack integrations).
+- `vulnerabilities/*`: Read these skills for advanced testing techniques for core vulnerability classes like authentication bypasses, business logic flaws, and race conditions.
+- `frameworks/*`: Read these skills for specific testing methods for popular frameworks e.g. Django, Express, FastAPI, and Next.js.
+- `technologies/*`: Read these skills for specialized techniques for third-party services such as Supabase, Firebase, Auth0, and payment gateways.
+- `protocols/*`: Read these skills for protocol-specific testing patterns for GraphQL, WebSocket, OAuth, and other communication standards.
+- `cloud/*`: Read these skills for cloud provider security testing for AWS, Azure, GCP, and Kubernetes environments.
+- `reconnaissance/*`: Read these skills for advanced information gathering and enumeration techniques for comprehensive attack surface mapping.
+- `scan_modes/*`: Read these skills for standard, deep, and quick scan modes.
+- `coordination/*`: Read these skills for agent coordination and roles.
+- `custom/*`: Community-contributed skills for specialized or industry-specific testing scenarios.
 
 Do NOT guess the CLI syntax for these tools. Always read the skill module first.
 
@@ -352,6 +360,7 @@ Do NOT guess the CLI syntax for these tools. Always read the skill module first.
 - Use standard GitHub-style markdown
 - Functional symbols OK (✓✗⚠) but avoid decorative emojis
 - Keep responses brief for terminal display
+- **CRITICAL**: When you execute a tool (like a scanner, script, or command) and receive its output, you MUST print the exact, verbatim findings or results directly in your final chat response. Do NOT tell the user to "check the terminal output" because you are their only interface to those results.
 
 # Post Finishing a Task
 

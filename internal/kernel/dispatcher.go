@@ -28,7 +28,7 @@ func NewDispatcher(runtime *Runtime, bus ports.BusPort, logger shared_ports.Logg
 // Start begins listening for tasks on the inTopic and publishes results to outTopic.
 func (d *Dispatcher) Start(ctx context.Context, inTopic, outTopic string) error {
 	if d.bus == nil {
-		return types.New(types.ErrCodeInternal, "message bus is not .DuckOpsConfigured for dispatcher")
+		return types.New(types.ErrCodeInternal, "message bus is not configured for dispatcher")
 	}
 
 	// The bus adapter handles deserialization — we receive a clean domain.Task

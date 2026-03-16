@@ -97,11 +97,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgentEvent(msg.ch)
 
 	case subagent.SubagentEvent:
+		msgType := LearningMsg
+		content := msg.Message
+
+		if msg.Type == subagent.EventThought {
+			msgType = ThoughtMsg
+			content = strings.TrimPrefix(content, "Thinking: ")
+		}
+
 		m.messages = append(m.messages, Message{
-			Type:      LearningMsg,
-			Content:   msg.Message,
+			Type:      msgType,
+			Content:   content,
 			Sender:    "DuckOps",
 			Timestamp: msg.Timestamp,
+		})
+		m.scroll = 0
+		m.stayAtBottom = true
+		return m, waitForAgentEvent(m.lastStreamCh)
+
+	case engine.ThoughtEvent:
+		m.messages = append(m.messages, Message{
+			Type:      ThoughtMsg,
+			Content:   msg.Rationale,
+			Sender:    "DuckOps",
+			Timestamp: time.Now(),
+		})
+		m.scroll = 0
+		m.stayAtBottom = true
+		return m, waitForAgentEvent(m.lastStreamCh)
+
+	case engine.ReflectionEvent:
+		m.messages = append(m.messages, Message{
+			Type:      ReflectionMsg,
+			Content:   msg.Reflection,
+			Sender:    "DuckOps",
+			Timestamp: time.Now(),
 		})
 		m.scroll = 0
 		m.stayAtBottom = true
@@ -353,12 +383,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleMenuKey(msg)
 	}
 
-	// ── Processing — only allow scroll + quit ───────────────────────
+	// ── Processing — allow scroll, but don't block input ──────────────
 	if m.isProcessing {
 		switch msg.Type {
 		case tea.KeyUp:
 			m.scroll++
 			m.stayAtBottom = false
+			return m, nil
 		case tea.KeyDown:
 			if m.scroll > 0 {
 				m.scroll--
@@ -366,8 +397,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.scroll == 0 {
 				m.stayAtBottom = true
 			}
+			return m, nil
+		case tea.KeyEnter:
+			// Prevent sending a new message while the agent is already processing one
+			m.toast = &Toast{Message: "Agent is currently processing a request", Level: ToastWarning}
+			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return toastDismissMsg{} })
 		}
-		return m, nil
+		// We purposefully DO NOT return here for other keys, 
+		// allowing them to fall through to the textarea update at the end!
 	}
 
 	// ── Normal mode keybindings ─────────────────────────────────────
@@ -395,6 +432,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.SetHeight(1)
 			m.scroll = 0
 			m.stayAtBottom = true
+
+			// Intercept specific tool list query before hitting Agent processing state
+			query := strings.TrimSpace(strings.ToLower(content))
+			if query == "list all tools" || query == "/tools" {
+				return m.showToolsTable()
+			}
+			if query == "list all skills" || query == "/skills" {
+				return m.showSkillsTable()
+			}
+
 			m.isProcessing = true
 			m.loading = true
 			return m, tea.Batch(m.runAgent(content), m.spinner.Tick)
@@ -553,4 +600,66 @@ func (m *model) routeShellCommand(input string) (tea.Model, tea.Cmd) {
 	m.shellActive = false
 
 	return m, m.shell.RunCommand(command, args)
+}
+
+// ── Tools Display ──────────────────────────────────────────────────
+
+func (m *model) showToolsTable() (tea.Model, tea.Cmd) {
+	toolsHeaders := []string{"#", "Tool", "Description"}
+	
+	// Mimic exactly what the user requested ("File & Code Operations" then "Command Execution")
+	toolsData := [][]string{
+		{"1", "view_file", "Read files/directories, supports glob, line ranges, tree view"},
+		{"2", "write_to_file", "Create or overwrite files with code content (local machine)"},
+		{"3", "multi_replace_file_content", "Find & replace exact text in files robustly"},
+		{"4", "grep_search", "Deep grep search across the codebase"},
+		{"5", "list_dir", "List files and subdirectories structurally"},
+		{"6", "run_command", "Execute shell commands securely in DuckOps workspace"},
+		{"7", "docker_warden", "Spins up ephemeral sandboxed Docker containers"},
+		{"8", "sast_scanner", "Runs targeted SAST (Semgrep, Trivy, Gosec) against codebase"},
+	}
+
+	m.messages = append(m.messages, Message{
+		Type:         AgentMsg,
+		Content:      "Here's the complete list of tools available to me:\n\n**File, Execution & Security Operations**",
+		Sender:       "DuckOps",
+		Timestamp:    time.Now(),
+		TableHeaders: toolsHeaders,
+		TableData:    toolsData,
+	})
+
+	m.scroll = 0
+	m.stayAtBottom = true
+
+	return m, nil
+}
+
+// ── Skills Display ──────────────────────────────────────────────────
+
+func (m *model) showSkillsTable() (tea.Model, tea.Cmd) {
+	skillsHeaders := []string{"Skill Name", "Focus Area / Description"}
+	
+	var skillsData [][]string
+	if m.skillRegistry != nil {
+		available := m.skillRegistry.ListSkills()
+		for _, s := range available {
+			skillsData = append(skillsData, []string{s.Name, s.Description})
+		}
+	} else {
+		skillsData = [][]string{{"Error", "Skill registry not initialized."}}
+	}
+
+	m.messages = append(m.messages, Message{
+		Type:         AgentMsg,
+		Content:      "Here's the complete list of Knowledge Skills loaded in my memory. I can dynamically fetch their full content when needed:\n\n**Available Agent Skills**",
+		Sender:       "DuckOps",
+		Timestamp:    time.Now(),
+		TableHeaders: skillsHeaders,
+		TableData:    skillsData,
+	})
+
+	m.scroll = 0
+	m.stayAtBottom = true
+
+	return m, nil
 }

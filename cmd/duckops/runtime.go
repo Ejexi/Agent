@@ -13,12 +13,13 @@ import (
 	"github.com/SecDuckOps/agent/internal/gui/tui"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/agent/internal/skills"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 )
 
 // runTUI launches the premium TUI interface.
-func runTUI(k *kernel.Kernel, modelName string, appSessionManager ports.AppSessionManager, eventBus ports.EventBusPort) {
-	if err := tui.Run(k, modelName, appSessionManager, eventBus); err != nil {
+func runTUI(k *kernel.Kernel, modelName string, appSessionManager ports.AppSessionManager, eventBus ports.EventBusPort, skillRegistry skills.Registry) {
+	if err := tui.Run(k, modelName, appSessionManager, eventBus, skillRegistry); err != nil {
 		fmt.Printf("\n\033[31mError launching TUI: %v\033[0m\n", err)
 		os.Exit(1)
 	}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/SecDuckOps/shared/scanner/domain"
@@ -134,10 +133,8 @@ func (w *DockerWarden) RunScan(ctx context.Context, opts ports.ScanOpts) (domain
 		Findings:    nil, // To be populated by Aggregator/Parser
 	}
 	
-	// Temporarily store raw output in Error/Status until we hook up full parser flow properly
-	if rawOutput != "" && len(rawOutput) > 0 {
-		res.Target = rawOutput // HACK: In the next sprint, this will be passed to `ResultParserPort`
-	}
+	// Store raw output correctly in the struct natively rather than overriding Target
+	res.RawOutput = rawOutput
 
 	return res, nil
 }
@@ -154,27 +151,23 @@ func (w *DockerWarden) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (w *DockerWarden) ensureImage(ctx context.Context, imageName string) error {
-	// Check if exists locally
-	_, _, err := w.cli.ImageInspectWithRaw(ctx, imageName)
+// ensureImage checks if the image exists or pulls it.
+func (w *DockerWarden) ensureImage(ctx context.Context, imageRef string) error {
+	_, _, err := w.cli.ImageInspectWithRaw(ctx, imageRef)
 	if err == nil {
-		return nil // Image exists
+		return nil
 	}
-
-	// If not found, pull it
-	reader, err := w.cli.ImagePull(ctx, imageName, image.PullOptions{})
+	rc, err := w.cli.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
-		return err
+		return types.Wrapf(err, types.ErrCodeInternal, "failed to pull image %s", imageRef)
 	}
-	defer reader.Close()
+	defer rc.Close()
+	_, _ = io.Copy(io.Discard, rc)
 
-	// Read output to ensure wait before continuing
-	buf := new(bytes.Buffer)
-	_, _ = io.Copy(buf, reader)
-
-	// Double check if pull was successful
-	if strings.Contains(buf.String(), "error") || strings.Contains(buf.String(), "not found") {
-		return fmt.Errorf("failed to pull image: %s", buf.String())
+	// B4 Fix: Verify the image actually exists now instead of string-matching JSON logs
+	_, _, err = w.cli.ImageInspectWithRaw(ctx, imageRef)
+	if err != nil {
+		return types.Wrapf(err, types.ErrCodeInternal, "failed to verify image %s after pull", imageRef)
 	}
 
 	return nil

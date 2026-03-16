@@ -91,10 +91,12 @@ func (m model) View() string {
 	chatMsgs := make([]components.ChatMessage, len(m.messages))
 	for i, msg := range m.messages {
 		chatMsgs[i] = components.ChatMessage{
-			Type:      int(msg.Type),
-			Content:   msg.Content,
-			Sender:    msg.Sender,
-			Timestamp: msg.Timestamp,
+			Type:         int(msg.Type),
+			Content:      msg.Content,
+			Sender:       msg.Sender,
+			Timestamp:    msg.Timestamp,
+			TableHeaders: msg.TableHeaders,
+			TableData:    msg.TableData,
 		}
 	}
 

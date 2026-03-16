@@ -98,7 +98,9 @@ func NewDispatcher(
 		}
 	}
 
-	// Order: Reflection -> Thinking -> Observability -> Translation -> Security -> Base (Execution)
+	// Define Pipeline (Outer to Inner)
+	// Registration order: Reflection -> Thinking -> Observability -> Translation -> Security
+	// Execution order: Translation -> Security -> (Execution) -> Observability -> Thinking -> Reflection
 	return &Dispatcher{
 		pipeline:     ChainMiddleware(base, ReflectionMiddleware(th), ThinkingMiddleware(th), observabilityMW, translateMW, securityMW),
 		logger:       l,
