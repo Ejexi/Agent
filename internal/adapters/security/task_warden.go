@@ -26,7 +26,7 @@ type TaskWardenAdapter struct {
 func NewTaskWardenAdapter(w ports.WardenPort, n ports.CommandNormalizer, l shared_ports.Logger) ports.SecurityGatePort {
 	// Shell metacharacters that allow command chaining or subshells.
 	blocked := []string{
-		"&&", ";", "|", "||", ">", ">>", "<", "$(", "`", "!",
+		"&&", ";", "|", "||", ">", ">>", "<", "$(", "`", "!","{}",
 	}
 
 	return &TaskWardenAdapter{
@@ -78,6 +78,13 @@ func (g *TaskWardenAdapter) Evaluate(ctx context.Context, task domain.OSTask) er
 			if len(decision.Reasons) > 0 {
 				reason = decision.Reasons[0]
 			}
+			
+			g.logger.Info(ctx, "Execution denied by Warden",
+				shared_ports.Field{Key: "command", Value: task.OriginalCmd},
+				shared_ports.Field{Key: "policy_id", Value: decision.PolicyID},
+				shared_ports.Field{Key: "reason", Value: reason},
+			)
+
 			return fmt.Errorf("execution denied: %s (policy_id: %s)", reason, decision.PolicyID)
 		}
 	}

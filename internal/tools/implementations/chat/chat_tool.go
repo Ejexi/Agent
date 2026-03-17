@@ -146,12 +146,69 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 	emit("Thinking: Analyzing your request...", subagent.EventThought)
 
 	for i := 0; i < maxSteps; i++ {
-		result, err := llm.Generate(ctx, messages, nil)
+		var result domain.GenerationResult
+		var err error
+		
+		// Attempt generation with current provider, with fallback rotation and retry logic
+		maxRetries := 3
+		for retry := 0; retry <= maxRetries; retry++ {
+			result, err = llm.Generate(ctx, messages, nil)
+			if err == nil {
+				break
+			}
+			
+			// If it's a 429 Too Many Requests, wait and retry with exponential backoff
+			if strings.Contains(err.Error(), "429") && retry < maxRetries {
+				backoff := time.Duration(1<<(retry+2)) * time.Second // Start with 4s, then 8s, then 16s
+				emit(fmt.Sprintf("Provider '%s' returned 429 (Too Many Requests). Backing off for %v...", llm.Name(), backoff), subagent.EventError)
+				
+				select {
+				case <-ctx.Done():
+					return agent_domain.Result{Success: false, Error: "context cancelled"}, ctx.Err()
+				case <-time.After(backoff):
+					continue
+				}
+			}
+			
+			// For other errors or final retry, break and handle fallback
+			break
+		}
 		if err != nil {
-			return agent_domain.Result{
-				Success: false,
-				Error:   err.Error(),
-			}, types.Wrapf(err, types.ErrCodeInternal, "failed to generate response with provider '%s'", params.AIProvider)
+			// Phase 6 Enhancements: Robust Multi-Provider Rotation
+			providers := t.llmRegistry.List()
+			
+			// Track which providers we've already tried in this step to avoid infinite loops
+			tried := make(map[string]bool)
+			tried[llm.Name()] = true
+			
+			success := false
+			for _, pName := range providers {
+				if tried[pName] {
+					continue
+				}
+				
+				fallbackLLM := t.llmRegistry.Get(pName)
+				if fallbackLLM == nil {
+					continue
+				}
+				
+				emit(fmt.Sprintf("Provider '%s' failed (%v). Rotating to fallback '%s'...", llm.Name(), err, pName), subagent.EventError)
+				
+				result, err = fallbackLLM.Generate(ctx, messages, nil)
+				if err == nil {
+					llm = fallbackLLM
+					success = true
+					break
+				}
+				tried[pName] = true
+			}
+			
+			if !success {
+				return agent_domain.Result{
+					Success: false,
+					Error:   err.Error(),
+				}, types.Wrapf(err, types.ErrCodeInternal, "all LLM providers failed to generate response")
+			}
 		}
 
 		lastUsage = result.Usage

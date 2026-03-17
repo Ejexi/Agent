@@ -58,7 +58,15 @@ and only pings when it needs a human.`,
 			// Run REPL in foreground
 			runInteractive(app.Kernel, app.Provider, "Stand Duck")
 		} else {
-			runTUI(app.Kernel, app.Model, app.AppSessions, app.EventBus, app.SkillRegistry)
+			actualModel := app.Model
+			if actualModel == "" && app.Kernel != nil && app.Kernel.Deps.LLM != nil {
+				if defaultLLM := app.Kernel.Deps.LLM.Get(app.Provider); defaultLLM != nil {
+					actualModel = defaultLLM.Model()
+				} else if defaultLLM = app.Kernel.Deps.LLM.Default(); defaultLLM != nil {
+					actualModel = defaultLLM.Model()
+				}
+			}
+			runTUI(app.Kernel, actualModel, app.AppSessions, app.EventBus, app.SkillRegistry)
 		}
 		return nil
 	},

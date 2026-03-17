@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/SecDuckOps/agent/internal/domain"
 	agent_domain "github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/tools/base"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/filesystem"
 	"github.com/SecDuckOps/shared/types"
 )
 
@@ -22,10 +24,13 @@ type FileOpsParams struct {
 
 type FileOpsTool struct {
 	base.BaseTypedTool[FileOpsParams]
+	gate *filesystem.WardenGate
 }
 
-func NewFileOpsTool() *FileOpsTool {
-	t := &FileOpsTool{}
+func NewFileOpsTool(gate *filesystem.WardenGate) *FileOpsTool {
+	t := &FileOpsTool{
+		gate: gate,
+	}
 	t.Impl = t
 	return t
 }
@@ -83,6 +88,11 @@ func (t *FileOpsTool) Execute(ctx context.Context, params FileOpsParams) (agent_
 
 	switch params.Action {
 	case "view":
+		if t.gate != nil {
+			if err := t.gate.CheckRead(ctx, absPath); err != nil {
+				return agent_domain.Result{Success: false, Error: err.Error()}, nil
+			}
+		}
 		data, err := os.ReadFile(absPath)
 		if err != nil {
 			return agent_domain.Result{Success: false, Error: fmt.Sprintf("failed to read file: %v", err)}, nil
@@ -92,50 +102,60 @@ func (t *FileOpsTool) Execute(ctx context.Context, params FileOpsParams) (agent_
 		if len(content) > 10000 {
 			content = content[:10000] + "...(truncated for length)"
 		}
-		return agent_domain.Result{
+		return domain.Result{
 			Success: true,
 			Data:    map[string]interface{}{"content": content},
 		}, nil
 
 	case "create":
+		if t.gate != nil {
+			if err := t.gate.CheckWrite(ctx, absPath); err != nil {
+				return domain.Result{Success: false, Error: err.Error()}, nil
+			}
+		}
 		// Ensure directory exists
 		dir := filepath.Dir(absPath)
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return agent_domain.Result{Success: false, Error: fmt.Sprintf("failed to create directories: %v", err)}, nil
+			return domain.Result{Success: false, Error: fmt.Sprintf("failed to create directories: %v", err)}, nil
 		}
 
 		err := os.WriteFile(absPath, []byte(params.Content), 0644)
 		if err != nil {
-			return agent_domain.Result{Success: false, Error: fmt.Sprintf("failed to create file: %v", err)}, nil
+			return domain.Result{Success: false, Error: fmt.Sprintf("failed to create file: %v", err)}, nil
 		}
-		return agent_domain.Result{
+		return domain.Result{
 			Success: true,
 			Data:    map[string]interface{}{"message": fmt.Sprintf("File created successfully at %s", absPath)},
 		}, nil
 
 	case "replace":
+		if t.gate != nil {
+			if err := t.gate.CheckWrite(ctx, absPath); err != nil {
+				return domain.Result{Success: false, Error: err.Error()}, nil
+			}
+		}
 		data, err := os.ReadFile(absPath)
 		if err != nil {
-			return agent_domain.Result{Success: false, Error: fmt.Sprintf("failed to read file for replacement: %v", err)}, nil
+			return domain.Result{Success: false, Error: fmt.Sprintf("failed to read file for replacement: %v", err)}, nil
 		}
-		
+
 		content := string(data)
 		if !strings.Contains(content, params.TargetText) {
-			return agent_domain.Result{Success: false, Error: "the target_text was not found in the file exactly as provided"}, nil
+			return domain.Result{Success: false, Error: "the target_text was not found in the file exactly as provided"}, nil
 		}
 
 		newContent := strings.Replace(content, params.TargetText, params.ReplacementText, 1)
-		
+
 		err = os.WriteFile(absPath, []byte(newContent), 0644)
 		if err != nil {
-			return agent_domain.Result{Success: false, Error: fmt.Sprintf("failed to write updated file: %v", err)}, nil
+			return domain.Result{Success: false, Error: fmt.Sprintf("failed to write updated file: %v", err)}, nil
 		}
 
-		return agent_domain.Result{
+		return domain.Result{
 			Success: true,
 			Data:    map[string]interface{}{"message": fmt.Sprintf("Successfully replaced text in %s", absPath)},
 		}, nil
 	}
 
-	return agent_domain.Result{Success: false, Error: "Unknown action"}, nil
+	return domain.Result{Success: false, Error: "Unknown action"}, nil
 }

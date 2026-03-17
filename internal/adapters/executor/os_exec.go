@@ -170,6 +170,13 @@ func (a *OSExecAdapter) Start(ctx context.Context, task domain.OSTask) (string, 
 			}
 		}
 		a.mu.Unlock()
+
+		a.logger.Info(context.Background(), "Command execution completed",
+			shared_ports.Field{Key: "session_id", Value: sessionID},
+			shared_ports.Field{Key: "command", Value: task.OriginalCmd},
+			shared_ports.Field{Key: "exit_code", Value: session.ExitCode},
+			shared_ports.Field{Key: "duration_ms", Value: time.Since(session.StartedAt).Milliseconds()},
+		)
 		
 		session.mu.Lock()
 		for _, ch := range session.subs {
@@ -185,6 +192,12 @@ func (a *OSExecAdapter) Start(ctx context.Context, task domain.OSTask) (string, 
 			a.mu.Unlock()
 		})
 	}()
+
+	a.logger.Info(context.Background(), "Command execution started",
+		shared_ports.Field{Key: "session_id", Value: sessionID},
+		shared_ports.Field{Key: "command", Value: task.OriginalCmd},
+		shared_ports.Field{Key: "cwd", Value: task.Cwd},
+	)
 
 	return sessionID, nil
 }

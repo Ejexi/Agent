@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SecDuckOps/shared/llm/domain"
 	"github.com/SecDuckOps/shared/ports"
@@ -29,7 +30,10 @@ func NewAIReviewer(registry domain.LLMRegistry, provider string, logger ports.Lo
 func (a *AIReviewer) Analyze(ctx context.Context, command string, args []string) (domain.GenerationResult, error) {
 	llm := a.llmRegistry.Get(a.provider)
 	if llm == nil {
-		return domain.GenerationResult{}, fmt.Errorf("LLM provider '%s' not found", a.provider)
+		llm = a.llmRegistry.Default()
+	}
+	if llm == nil {
+		return domain.GenerationResult{}, fmt.Errorf("no LLM provider found")
 	}
 
 	prompt := fmt.Sprintf(`You are the DuckOps Command Reviewer.
@@ -42,11 +46,51 @@ Command: %s %v
 
 Response format: Just the rationale text, no prefix like "Rationale:".`, command, args)
 
-	result, err := llm.Generate(ctx, []domain.Message{
-		{Role: domain.RoleUser, Content: prompt},
-	}, nil)
+	var result domain.GenerationResult
+	var err error
+	maxRetries := 2
+	for retry := 0; retry <= maxRetries; retry++ {
+		result, err = llm.Generate(ctx, []domain.Message{
+			{Role: domain.RoleUser, Content: prompt},
+		}, nil)
+		if err == nil {
+			break
+		}
+		if strings.Contains(err.Error(), "429") && retry < maxRetries {
+			select {
+			case <-ctx.Done():
+				return domain.GenerationResult{}, ctx.Err()
+			case <-time.After(time.Duration(1<<retry) * time.Second):
+				continue
+			}
+		}
+		break
+	}
 
 	if err != nil {
+		// Fallback rotation
+		providers := a.llmRegistry.List()
+		tried := make(map[string]bool)
+		tried[llm.Name()] = true
+
+		for _, pName := range providers {
+			if tried[pName] {
+				continue
+			}
+			fallbackLLM := a.llmRegistry.Get(pName)
+			if fallbackLLM == nil {
+				continue
+			}
+
+			result, err = fallbackLLM.Generate(ctx, []domain.Message{
+				{Role: domain.RoleUser, Content: prompt},
+			}, nil)
+			if err == nil {
+				result.Content = strings.TrimSpace(result.Content)
+				return result, nil
+			}
+			tried[pName] = true
+		}
 		return domain.GenerationResult{}, err
 	}
 
@@ -57,7 +101,10 @@ Response format: Just the rationale text, no prefix like "Rationale:".`, command
 func (a *AIReviewer) Reflect(ctx context.Context, command string, args []string, stdout string, stderr string) (domain.GenerationResult, error) {
 	llm := a.llmRegistry.Get(a.provider)
 	if llm == nil {
-		return domain.GenerationResult{}, fmt.Errorf("LLM provider '%s' not found", a.provider)
+		llm = a.llmRegistry.Default()
+	}
+	if llm == nil {
+		return domain.GenerationResult{}, fmt.Errorf("no LLM provider found")
 	}
 
 	content := stdout
@@ -89,11 +136,51 @@ Instructions:
 
 Response format: Just the beautified presentation text, no conversational prefix.`, command, args, content)
 
-	result, err := llm.Generate(ctx, []domain.Message{
-		{Role: domain.RoleUser, Content: prompt},
-	}, nil)
+	var result domain.GenerationResult
+	var err error
+	maxRetries := 2
+	for retry := 0; retry <= maxRetries; retry++ {
+		result, err = llm.Generate(ctx, []domain.Message{
+			{Role: domain.RoleUser, Content: prompt},
+		}, nil)
+		if err == nil {
+			break
+		}
+		if strings.Contains(err.Error(), "429") && retry < maxRetries {
+			select {
+			case <-ctx.Done():
+				return domain.GenerationResult{}, ctx.Err()
+			case <-time.After(time.Duration(1<<retry) * time.Second):
+				continue
+			}
+		}
+		break
+	}
 
 	if err != nil {
+		// Fallback rotation
+		providers := a.llmRegistry.List()
+		tried := make(map[string]bool)
+		tried[llm.Name()] = true
+
+		for _, pName := range providers {
+			if tried[pName] {
+				continue
+			}
+			fallbackLLM := a.llmRegistry.Get(pName)
+			if fallbackLLM == nil {
+				continue
+			}
+
+			result, err = fallbackLLM.Generate(ctx, []domain.Message{
+				{Role: domain.RoleUser, Content: prompt},
+			}, nil)
+			if err == nil {
+				result.Content = strings.TrimSpace(result.Content)
+				return result, nil
+			}
+			tried[pName] = true
+		}
 		return domain.GenerationResult{}, err
 	}
 
