@@ -10,7 +10,6 @@ import (
 	"github.com/SecDuckOps/agent/internal/adapters/configsync"
 	"github.com/SecDuckOps/agent/internal/adapters/events"
 	"github.com/SecDuckOps/agent/internal/adapters/executor"
-	"github.com/SecDuckOps/agent/internal/adapters/secrets"
 	"github.com/SecDuckOps/agent/internal/adapters/security"
 	agent_app "github.com/SecDuckOps/agent/internal/application"
 	sa "github.com/SecDuckOps/agent/internal/adapters/subagent"
@@ -24,6 +23,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/tools/implementations/chat"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/delegate"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/file_ops"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/filesystem"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/notes"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/reporting"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/scan"
@@ -210,16 +210,7 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 
 	// Initialize Secret Scanner
 	var secretScanner ports.SecretScannerPort
-	if profile.Secrets != nil && profile.Secrets.Enabled {
-		// Use empty string to load just the default embedded patterns
-		scanner, scanErr := secrets.NewWithCustomPatterns("")
-		if scanErr != nil {
-			appLogger.ErrorErr(ctx, scanErr, "Failed to initialize Secret Scanner, secrets will NOT be scrubbed")
-		} else {
-			secretScanner = scanner
-			appLogger.Info(ctx, "Secret Scanner initialized successfully")
-		}
-	}
+
 
 	tracker := sa.NewTracker(bridge, bridge, secretScanner, appLogger)
 
@@ -349,6 +340,9 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 
 	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, deps.ShellExecution, aiReviewer, appLogger)
 
+	// Security Gates
+	fsGate := filesystem.NewWardenGate(deps.Warden, appLogger)
+
 	tools := []struct {
 		name string
 		err  error
@@ -361,7 +355,7 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 		{"terminal", toolRegistry.RegisterTool(ctx, terminal.NewTerminalTool(taskDispatcher))},
 		{"notes", toolRegistry.RegisterTool(ctx, notes.NewNotesTool())},
 		{"todo", toolRegistry.RegisterTool(ctx, todo.NewTodoTool())},
-		{"file_edit", toolRegistry.RegisterTool(ctx, file_ops.NewFileOpsTool())},
+		{"file_edit", toolRegistry.RegisterTool(ctx, file_ops.NewFileOpsTool(fsGate))},
 		{"generate_report", toolRegistry.RegisterTool(ctx, reporting.NewReportingTool(deps.LLM))},
 	}
 	skillRegistry, err := domain_skills.NewEmbeddedRegistry()
