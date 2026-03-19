@@ -118,7 +118,7 @@ func isSubPath(child, parent string) bool {
 	}
 
 	// If the relative path starts with "..", the child is outside the parent
-	return !strings.HasPrefix(rel, "..") && rel != "."  || rel == "."
+	return !strings.HasPrefix(rel, "..") || rel == "."
 }
 
 // isWindows returns true if the current OS is Windows.

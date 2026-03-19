@@ -66,7 +66,7 @@ func (a *AuditLogger) GetByAction(action security.AuditAction) []security.AuditE
 
 // appendToFile writes an entry to the audit file in append-only mode.
 func (a *AuditLogger) appendToFile(entry security.AuditEntry) error {
-	f, err := os.OpenFile(a.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(a.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}

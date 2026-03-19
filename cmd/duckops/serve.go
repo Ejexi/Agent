@@ -29,7 +29,10 @@ var serveCmd = &cobra.Command{
 			return types.Wrap(err, types.ErrCodeInternal, "failed to load config")
 		}
 
-		app := bootstrap.FromTOML(context.Background(), tomlCfg)
+		app, err := bootstrap.FromTOML(context.Background(), tomlCfg)
+		if err != nil {
+			return fmt.Errorf("failed to initialize agent: %w", err)
+		}
 		defer app.Shutdown()
 
 		addr := serveAddr

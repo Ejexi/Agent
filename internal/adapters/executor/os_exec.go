@@ -51,13 +51,9 @@ func (a *OSExecAdapter) Execute(ctx context.Context, task domain.OSTask) (domain
 		return domain.OSTaskResult{ExitCode: -1}, err
 	}
 
-	a.mu.RLock()
-	session := a.sessions[sessionID]
-	a.mu.RUnlock()
-
 	ch, _ := a.Subscribe(ctx, sessionID)
 	var stdout, stderr strings.Builder
-	
+
 	done := make(chan struct{})
 	go func() {
 		for output := range ch {
@@ -72,15 +68,19 @@ func (a *OSExecAdapter) Execute(ctx context.Context, task domain.OSTask) (domain
 
 	<-done
 
+	// Re-read session state after cmd.Wait has completed (goroutine in Start sets ExitCode)
 	a.mu.RLock()
-	defer a.mu.RUnlock()
+	s := a.sessions[sessionID]
+	exitCode := s.ExitCode
+	startedAt := s.StartedAt
+	a.mu.RUnlock()
 
 	return domain.OSTaskResult{
 		Status:     domain.StatusCompleted,
 		Stdout:     strings.TrimSpace(stdout.String()),
 		Stderr:     strings.TrimSpace(stderr.String()),
-		ExitCode:   session.ExitCode,
-		DurationMs: time.Since(session.StartedAt).Milliseconds(),
+		ExitCode:   exitCode,
+		DurationMs: time.Since(startedAt).Milliseconds(),
 		SessionID:  sessionID,
 	}, nil
 }

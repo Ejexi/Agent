@@ -84,12 +84,13 @@ func (s *SubagentSession) SetPauseInfo(info *sa.PauseInfo) {
 // Tracker manages all active subagent sessions.
 // Completely decoupled from the Kernel — the Kernel only executes tools.
 type Tracker struct {
-	sessions       map[string]*SubagentSession
-	executor       ports.ToolExecutor
-	schemaProvider ports.ToolSchemaProvider
-	secretScanner  ports.SecretScannerPort
-	logger         shared_ports.Logger
-	mu             sync.RWMutex
+	sessions          map[string]*SubagentSession
+	executor          ports.ToolExecutor
+	schemaProvider    ports.ToolSchemaProvider
+	secretScanner     ports.SecretScannerPort
+	logger            shared_ports.Logger
+	OnSessionComplete func(sessionID string) // Optional hook for session cleanup
+	mu                sync.RWMutex
 }
 
 // NewTracker creates a new subagent tracker.
@@ -213,6 +214,12 @@ func (t *Tracker) CancelSession(sessionID string) error {
 
 	session.Cancel()
 	session.SetStatus(sa.StatusCancelled)
+
+	// Trigger hook
+	if t.OnSessionComplete != nil {
+		t.OnSessionComplete(sessionID)
+	}
+
 	return nil
 }
 
@@ -351,6 +358,9 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 					t.logger.ErrorErr(session.Ctx, retryErr, "Failed to spawn retry session", shared_ports.Field{Key: "original_id", Value: originalID})
 				}
 				session.SetStatus(sa.StatusFailed)
+				if t.OnSessionComplete != nil {
+					t.OnSessionComplete(session.Subagent.SessionID)
+				}
 			} else {
 				if t.logger != nil {
 					t.logger.Info(session.Ctx, "Spawned retry session",
@@ -363,8 +373,14 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 		}
 
 		session.SetStatus(sa.StatusFailed)
+		if t.OnSessionComplete != nil {
+			t.OnSessionComplete(session.Subagent.SessionID)
+		}
 		return
 	}
 
 	session.SetStatus(sa.StatusCompleted)
+	if t.OnSessionComplete != nil {
+		t.OnSessionComplete(session.Subagent.SessionID)
+	}
 }

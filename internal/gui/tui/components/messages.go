@@ -194,18 +194,14 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 
 	var renderedBody string
 	if isPureShell {
-		// Render without indicator for shell blocks to preserve alignment.
-		// Strip the ```shell and ``` markers for cleaner raw-like display
+		// Extract content from ```shell ... ``` and render via glamour as a code block
 		cleanContent := strings.TrimSpace(msg.Content)
 		cleanContent = strings.TrimPrefix(cleanContent, "```shell")
 		cleanContent = strings.TrimSuffix(cleanContent, "```")
 		cleanContent = strings.TrimSpace(cleanContent)
 
-		// Use simple wordwrap or just keep it as is if it fits
-		renderedBody = lipgloss.NewStyle().
-			Foreground(textColor).
-			PaddingLeft(2).
-			Render(cleanContent)
+		// Re-wrap as a plain code block so glamour renders it with syntax highlighting
+		renderedBody = renderMarkdown("```\n"+cleanContent+"\n```", contentWidth-4)
 	} else {
 		// Status line indicator (Glow style) for normal messages
 		indicator := "│"

@@ -127,7 +127,7 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 	}
 	messages = append(messages, domain.Message{Role: domain.RoleUser, Content: params.Prompt})
 
-	const maxSteps = 15
+	const maxSteps = 30
 	var lastUsage domain.TokenUsage
 	var finalResponse string
 

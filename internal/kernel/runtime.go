@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -86,8 +87,11 @@ func (r *Runtime) Execute(ctx *ExecutionContext, task domain.Task) (domain.Resul
 		})
 	}
 
+	// Inject SessionID into standard context so tools don't need to import kernel packages
+	toolCtx := context.WithValue(ctx, "sessionID", task.SessionID)
+
 	// Runtime executes the tool (only the runtime should execute this)
-	result, err := tool.ExecuteRaw(ctx, task.Args)
+	result, err := tool.ExecuteRaw(toolCtx, task.Args)
 	if err != nil {
 		appErr := types.Wrapf(err, types.ErrCodeToolExecution, "failed to execute tool %s", task.Tool)
 		return result, appErr

@@ -123,7 +123,7 @@ func TestLogger_BackupSession(t *testing.T) {
 		SessionID: sessionID,
 		Files: map[string][]byte{
 			"/tmp/test.go":   []byte("package main"),
-			"/tmp/.DuckOpsConfig.go": []byte("package .DuckOpsConfig"),
+			"/tmp/config.go": []byte("package config"),
 		},
 		FileList:  []string{"/tmp/test.go", "/tmp/.DuckOpsConfig.go"},
 		CreatedAt: time.Now(),

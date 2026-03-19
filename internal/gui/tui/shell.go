@@ -188,7 +188,8 @@ func (m *ShellModel) Update(msg tea.Msg) (*ShellModel, tea.Cmd) {
 		if len(m.buffer) > 50000 {
 			m.buffer = m.buffer[len(m.buffer)-50000:]
 		}
-		m.viewport.SetContent(stripANSI(string(m.buffer)))
+		// Keep ANSI colors intact — the viewport can render them
+		m.viewport.SetContent(string(m.buffer))
 		m.viewport.GotoBottom()
 		return m, m.readOutput()
 

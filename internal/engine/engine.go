@@ -12,6 +12,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
+	"github.com/google/uuid"
 	"path/filepath"
 )
 
@@ -79,16 +80,19 @@ func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, erro
 			security.CapReadFS,
 			security.CapExecuteShell,
 		}).WithEventCallback(func(evt any) {
-			
-			// Intercept cognitive steps from the middleware pipeline
+			// Intercept cognitive steps from the middleware pipeline.
+			// Send the typed event only — do NOT also forward the raw event,
+			// as that causes the TUI to receive duplicates.
 			if task, ok := evt.(domain.OSTask); ok {
 				if task.Rationale != "" {
 					eventCh <- ThoughtEvent{
 						Rationale: task.Rationale,
-						Model:     "arcee-ai/trinity-large-preview:free", // Defaulting for visual feedback
+						Model:     "arcee-ai/trinity-large-preview:free",
 					}
 				}
-			} else if taskResult, ok := evt.(domain.OSTaskResult); ok {
+				return // consumed — do not forward raw
+			}
+			if taskResult, ok := evt.(domain.OSTaskResult); ok {
 				if taskResult.Reflection != "" {
 					eventCh <- ReflectionEvent{
 						Reflection: taskResult.Reflection,
@@ -96,9 +100,9 @@ func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, erro
 						Model:      taskResult.Model,
 					}
 				}
+				return // consumed — do not forward raw
 			}
-
-			// Still pass raw events for backwards compatibility
+			// Forward unknown/unhandled events as-is
 			eventCh <- evt
 		})
 
@@ -151,7 +155,7 @@ func (e *Engine) prepareTask(input string) domain.Task {
 
 	if isShellCommand {
 		return domain.Task{
-			ID:   "tui_task",
+			ID:   "tui_" + uuid.New().String()[:8],
 			Tool: "terminal",
 			Args: map[string]interface{}{
 				"command": cmdParts[0],
@@ -161,11 +165,11 @@ func (e *Engine) prepareTask(input string) domain.Task {
 			RequiredCaps: []security.Capability{security.CapExecuteShell},
 		}
 	}
-	
+
 	if strings.HasPrefix(input, "/") {
 		// Handle / commands (simplified)
 		return domain.Task{
-			ID:   "tui_chat",
+			ID:   "tui_" + uuid.New().String()[:8],
 			Tool: "chat",
 			Args: map[string]interface{}{
 				"prompt": input,
@@ -174,7 +178,7 @@ func (e *Engine) prepareTask(input string) domain.Task {
 	}
 
 	return domain.Task{
-		ID:   "tui_chat",
+		ID:   "tui_" + uuid.New().String()[:8],
 		Tool: "chat",
 		Args: map[string]interface{}{
 			"prompt": input,
@@ -217,8 +221,8 @@ func (e *Engine) GetSuggestions(ctx context.Context) []string {
 	}
 
 	// Simple shuffle
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(pool), func(i, j int) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	r.Shuffle(len(pool), func(i, j int) {
 		pool[i], pool[j] = pool[j], pool[i]
 	})
 

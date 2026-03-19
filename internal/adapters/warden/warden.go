@@ -86,13 +86,15 @@ func (w *Warden) Evaluate(_ context.Context, req security.NetworkRequest) (secur
 		decision.Reasons = append(decision.Reasons, "default allow")
 	}
 
-	w.logger.Info(context.Background(), "Warden evaluation",
-		shared_ports.Field{Key: "request_id", Value: req.ID},
-		shared_ports.Field{Key: "tool", Value: req.SourceTool},
-		shared_ports.Field{Key: "method", Value: req.Method},
-		shared_ports.Field{Key: "url", Value: req.URL},
-		shared_ports.Field{Key: "allowed", Value: decision.Allowed},
-	)
+	if w.logger != nil {
+		w.logger.Info(context.Background(), "Warden evaluation",
+			shared_ports.Field{Key: "request_id", Value: req.ID},
+			shared_ports.Field{Key: "tool", Value: req.SourceTool},
+			shared_ports.Field{Key: "method", Value: req.Method},
+			shared_ports.Field{Key: "url", Value: req.URL},
+			shared_ports.Field{Key: "allowed", Value: decision.Allowed},
+		)
+	}
 
 	return decision, nil
 }
@@ -135,11 +137,13 @@ func (w *Warden) EvaluateExecution(_ context.Context, req security.ExecutionRequ
 		decision.Reasons = append(decision.Reasons, "default allow")
 	}
 
-	w.logger.Info(context.Background(), "Warden execution evaluation",
-		shared_ports.Field{Key: "request_id", Value: req.ID},
-		shared_ports.Field{Key: "command", Value: req.Command},
-		shared_ports.Field{Key: "allowed", Value: decision.Allowed},
-	)
+	if w.logger != nil {
+		w.logger.Info(context.Background(), "Warden execution evaluation",
+			shared_ports.Field{Key: "request_id", Value: req.ID},
+			shared_ports.Field{Key: "command", Value: req.Command},
+			shared_ports.Field{Key: "allowed", Value: decision.Allowed},
+		)
+	}
 
 	return decision, nil
 }
@@ -159,9 +163,11 @@ func (w *Warden) LoadPolicies(_ context.Context, policies []security.NetworkPoli
 		}
 	}
 
-	w.logger.Info(context.Background(), "Warden policies loaded",
-		shared_ports.Field{Key: "count", Value: len(w.policies)},
-	)
+	if w.logger != nil {
+		w.logger.Info(context.Background(), "Warden policies loaded",
+			shared_ports.Field{Key: "count", Value: len(w.policies)},
+		)
+	}
 
 	return nil
 }
@@ -221,12 +227,15 @@ func (w *Warden) StartProxy(ctx context.Context, listenAddr string) error {
 	}
 
 	w.proxyAddr = w.listener.Addr().String()
-	w.logger.Info(ctx, "Warden proxy started", shared_ports.Field{Key: "addr", Value: w.proxyAddr})
+	if w.logger != nil {
+		w.logger.Info(ctx, "Warden proxy started", shared_ports.Field{Key: "addr", Value: w.proxyAddr})
+	}
 
 	go func() {
 		if serveErr := w.server.Serve(w.listener); serveErr != nil && serveErr != http.ErrServerClosed {
-			// Log error — in production this would go to the audit log
-			w.logger.ErrorErr(ctx, serveErr, "Proxy server stopped unexpectedly")
+			if w.logger != nil {
+				w.logger.ErrorErr(ctx, serveErr, "Proxy server stopped unexpectedly")
+			}
 		}
 	}()
 
@@ -240,7 +249,9 @@ func (w *Warden) StopProxy(ctx context.Context) error {
 
 	w.closed = true
 	if w.server != nil {
-		w.logger.Info(ctx, "Warden proxy stopping")
+		if w.logger != nil {
+			w.logger.Info(ctx, "Warden proxy stopping")
+		}
 		return w.server.Shutdown(ctx)
 	}
 	return nil

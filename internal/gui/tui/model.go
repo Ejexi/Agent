@@ -93,10 +93,9 @@ type Toast struct {
 // ── Model ──────────────────────────────────────────────────────────
 
 const (
-	minTerminalWidth  = 80
-	minTerminalHeight = 24
-	maxUIWidth        = 140
-	maxUIHeight       = 50
+	minTerminalWidth  = 60  // absolute floor — below this, show warning
+	minTerminalHeight = 16
+	// No max width enforced — fill the terminal
 )
 
 type layoutMetrics struct {
@@ -172,16 +171,15 @@ type model struct {
 func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionManager ports.AppSessionManager, eventBus ports.EventBusPort, skillRegistry skills.Registry) model {
 	// ── Textarea ────────────────────────────────────────────────────
 	ta := textarea.New()
-	ta.Placeholder = "Type a message or ! for commands"
+	ta.Placeholder = "Type a message, @file to attach, ! for shell, / for commands"
 	ta.Focus()
-	ta.CharLimit = 4000
-	ta.MaxHeight = 1
+	ta.CharLimit = 32000 // support large pastes
+	ta.MaxHeight = 1    // grows up to 12 lines before scrolling
 	ta.ShowLineNumbers = false
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(Theme.Text)
 	ta.BlurredStyle.Base = lipgloss.NewStyle().Foreground(Theme.Muted)
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(Theme.Muted)
-	// Start with 1 line and let it automatically grow up to MaxHeight
 	ta.SetHeight(1)
 
 	// ── Spinner ─────────────────────────────────────────────────────

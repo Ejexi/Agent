@@ -18,23 +18,22 @@ func ThinkingMiddleware(reviewer ports.ThinkingPort) TaskMiddleware {
 			if reviewer != nil && task.Rationale == "" {
 				result, err := reviewer.Analyze(ctx, task.OriginalCmd, task.Args)
 				if err == nil {
-					// Enrich the task with the rationale
 					task.Rationale = result.Content
 					middleUsage = result.Usage
-					middleModel = "" 
+					// middleModel is intentionally left empty here:
+					// ThinkingPort.Analyze returns GenerationResult which has no Model field.
+					// Model tracking happens downstream via OSTaskResult.Model.
+					_ = middleModel
 				}
 			}
 			res := next(ctx, task)
 			res.Rationale = task.Rationale
-			
+
 			// Accumulate usage
 			res.Usage.PromptTokens += middleUsage.PromptTokens
 			res.Usage.CompletionTokens += middleUsage.CompletionTokens
 			res.Usage.TotalTokens += middleUsage.TotalTokens
-			if middleModel != "" {
-				res.Model = middleModel
-			}
-			
+
 			return res
 		}
 	}
@@ -53,10 +52,6 @@ func ReflectionMiddleware(reviewer ports.ThinkingPort) TaskMiddleware {
 					res.Usage.PromptTokens += result.Usage.PromptTokens
 					res.Usage.CompletionTokens += result.Usage.CompletionTokens
 					res.Usage.TotalTokens += result.Usage.TotalTokens
-					// Don't overwrite model if already set, but set if empty
-					if res.Model == "" {
-						res.Model = "" 
-					}
 				}
 			}
 

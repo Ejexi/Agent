@@ -65,7 +65,7 @@ func (k *Kernel) RegisterTool(ctx context.Context, tool domain.Tool) error {
 // inTopic is where incoming commands arrive, and outTopic is where results are published.
 func (k *Kernel) StartDispatcher(ctx context.Context, inTopic, outTopic string) error {
 	if k.Deps.MessageBus == nil {
-		return types.New(types.ErrCodeInternal, "message bus is not .DuckOpsConfigured")
+		return types.New(types.ErrCodeInternal, "message bus is not configured")
 	}
 	return k.dispatcher.Start(ctx, inTopic, outTopic)
 }

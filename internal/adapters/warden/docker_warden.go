@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/SecDuckOps/shared/scanner/domain"
 	"github.com/SecDuckOps/shared/scanner/ports"
 	"github.com/SecDuckOps/shared/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -55,6 +57,17 @@ func (w *DockerWarden) RunScan(ctx context.Context, opts ports.ScanOpts) (domain
 
 	// 2. Build secure container config
 	containerCfg, hostCfg, netCfg := buildContainerConfig(opts, resolvedImage)
+	
+	// Tie this container to the current execution session
+	if containerCfg.Labels == nil {
+		containerCfg.Labels = make(map[string]string)
+	}
+	containerCfg.Labels["duckops.managed"] = "true" // Always mark as managed by DuckOps
+
+	sessionID, _ := ctx.Value("sessionID").(string)
+	if sessionID != "" {
+		containerCfg.Labels["duckops.session.id"] = sessionID
+	}
 
 	// 3. Create Container
 	resp, err := w.cli.ContainerCreate(ctx, containerCfg, hostCfg, netCfg, nil, "")
@@ -64,13 +77,14 @@ func (w *DockerWarden) RunScan(ctx context.Context, opts ports.ScanOpts) (domain
 
 	containerID := resp.ID
 
-	// Defer cleanup: FORCE REMOVE the container when we are done
-	defer func() {
+	// Helper to force-remove the container (used on early-exit errors and after output capture).
+	removeContainer := func() {
 		_ = w.cli.ContainerRemove(context.Background(), containerID, container.RemoveOptions{Force: true})
-	}()
+	}
 
 	// 4. Start Container
 	if err := w.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+		removeContainer()
 		return domain.ScanResult{}, types.Wrap(err, types.ErrCodeInternal, "failed to start scanner container")
 	}
 
@@ -81,20 +95,22 @@ func (w *DockerWarden) RunScan(ctx context.Context, opts ports.ScanOpts) (domain
 	select {
 	case err := <-errCh:
 		if err != nil {
+			removeContainer()
 			return domain.ScanResult{}, types.Wrap(err, types.ErrCodeInternal, "container execution failed")
 		}
 	case status := <-statusCh:
 		statusCode = status.StatusCode
 	case <-ctx.Done():
+		removeContainer()
 		return domain.ScanResult{}, types.Wrap(ctx.Err(), types.ErrCodeExecutionFailed, "scan timeout or context cancelled")
 	}
 
-	// 6. Capture Logs (stdout and stderr)
+	// 6. Capture Logs (stdout and stderr) — container is still alive at this point
 	out, err := w.cli.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
+		removeContainer()
 		return domain.ScanResult{}, types.Wrap(err, types.ErrCodeInternal, "failed to read container logs")
 	}
-	defer out.Close()
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	// Docker multiplexes stdout/stderr, use stdcopy to demux
@@ -104,9 +120,14 @@ func (w *DockerWarden) RunScan(ctx context.Context, opts ports.ScanOpts) (domain
 		buf, _ := io.ReadAll(out)
 		stdoutBuf.Write(buf)
 	}
+	out.Close()
 
 	rawOutput := stdoutBuf.String()
 	errMsg := stderrBuf.String()
+
+	// 7. WE NO LONGER REMOVE THE CONTAINER HERE!
+	// The user requested that containers bind to the session lifecycle and remain active/persisted
+	// until the session itself is closed or deleted.
 	
 	duration := time.Since(start).String()
 
@@ -151,6 +172,30 @@ func (w *DockerWarden) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// WarmupImages pulls all scanner images in parallel at agent startup.
+// Failures are non-fatal — the scan will attempt a pull at runtime if needed.
+// Satisfies the ScannerPort interface.
+func (w *DockerWarden) WarmupImages(ctx context.Context, scannerNames []string) error {
+	var wg sync.WaitGroup
+	for _, name := range scannerNames {
+		name := name
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			imageRef, err := GetImageForScanner(name)
+			if err != nil {
+				return // unknown scanner — skip silently
+			}
+			if err := w.ensureImage(ctx, imageRef); err != nil {
+				// non-fatal: scan will retry at runtime
+				return
+			}
+		}()
+	}
+	wg.Wait()
+	return nil
+}
+
 // ensureImage checks if the image exists or pulls it.
 func (w *DockerWarden) ensureImage(ctx context.Context, imageRef string) error {
 	_, _, err := w.cli.ImageInspectWithRaw(ctx, imageRef)
@@ -168,6 +213,55 @@ func (w *DockerWarden) ensureImage(ctx context.Context, imageRef string) error {
 	_, _, err = w.cli.ImageInspectWithRaw(ctx, imageRef)
 	if err != nil {
 		return types.Wrapf(err, types.ErrCodeInternal, "failed to verify image %s after pull", imageRef)
+	}
+
+	return nil
+}
+
+// CleanupSession removes all scanner containers associated with the given session ID.
+func (w *DockerWarden) CleanupSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+
+	// Filter containers by label duckops.session.id
+	f := filters.NewArgs()
+	f.Add("label", fmt.Sprintf("duckops.session.id=%s", sessionID))
+
+	containers, err := w.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: f,
+	})
+	if err != nil {
+		return types.Wrapf(err, types.ErrCodeInternal, "failed to list containers for session cleanup: %s", sessionID)
+	}
+
+	for _, c := range containers {
+		_ = w.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{
+			Force: true,
+		})
+	}
+
+	return nil
+}
+
+// CleanupAllManagedContainers removes any and all containers created by this DuckOps instance.
+func (w *DockerWarden) CleanupAllManagedContainers(ctx context.Context) error {
+	f := filters.NewArgs()
+	f.Add("label", "duckops.managed=true")
+
+	containers, err := w.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: f,
+	})
+	if err != nil {
+		return types.Wrap(err, types.ErrCodeInternal, "failed to list all managed containers for cleanup")
+	}
+
+	for _, c := range containers {
+		_ = w.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{
+			Force: true,
+		})
 	}
 
 	return nil

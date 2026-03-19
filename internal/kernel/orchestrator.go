@@ -61,8 +61,10 @@ func (o *Orchestrator) ExecutePlan(ctx *ExecutionContext, plan *orchestration.Ex
 }
 
 // executeLevel runs all tasks in a single level in parallel.
+// Uses a mutex to protect concurrent writes to plan.Tasks.
 func (o *Orchestrator) executeLevel(ctx *ExecutionContext, plan *orchestration.ExecutionPlan, level []orchestration.DAGTask) error {
 	var wg sync.WaitGroup
+	var mu sync.Mutex // guards concurrent writes to plan.Tasks
 	errCh := make(chan error, len(level))
 
 	for i := range level {
@@ -70,24 +72,31 @@ func (o *Orchestrator) executeLevel(ctx *ExecutionContext, plan *orchestration.E
 		go func(dagTask orchestration.DAGTask) {
 			defer wg.Done()
 
-			// Update status in the plan
+			mu.Lock()
 			o.updateTaskStatus(plan, dagTask.ID, orchestration.DAGStatusRunning)
+			mu.Unlock()
 
 			result, err := o.runtime.Execute(ctx, dagTask.Task)
 			if err != nil {
+				mu.Lock()
 				o.updateTaskStatus(plan, dagTask.ID, orchestration.DAGStatusFailed)
+				mu.Unlock()
 				errCh <- fmt.Errorf("task %s failed: %w", dagTask.ID, err)
 				return
 			}
 
 			if !result.Success {
+				mu.Lock()
 				o.updateTaskStatus(plan, dagTask.ID, orchestration.DAGStatusFailed)
+				mu.Unlock()
 				errCh <- fmt.Errorf("task %s returned failure: %s", dagTask.ID, result.Error)
 				return
 			}
 
+			mu.Lock()
 			o.updateTaskStatus(plan, dagTask.ID, orchestration.DAGStatusSuccess)
 			o.updateTaskResult(plan, dagTask.ID, &result)
+			mu.Unlock()
 		}(level[i])
 	}
 
@@ -104,14 +113,28 @@ func (o *Orchestrator) executeLevel(ctx *ExecutionContext, plan *orchestration.E
 }
 
 // rollback executes rollback tasks for completed tasks in reverse order.
+// Logs errors but does not abort — all rollbacks must be attempted.
 func (o *Orchestrator) rollback(ctx *ExecutionContext, plan *orchestration.ExecutionPlan) {
 	rollbackChain := plan.GetRollbackChain()
 	for _, rollbackTask := range rollbackChain {
-		_, _ = o.runtime.Execute(ctx, rollbackTask)
+		if _, err := o.runtime.Execute(ctx, rollbackTask); err != nil {
+			// Log rollback failure but continue — partial rollback is better than none
+			if o.auditLog != nil {
+				_ = o.auditLog.Record(ctx, security.AuditEntry{
+					Action: security.AuditToolResult,
+					Actor:  "orchestrator",
+					Target: rollbackTask.ID,
+					Details: map[string]interface{}{
+						"rollback_error": err.Error(),
+					},
+				})
+			}
+		}
 	}
 }
 
 // updateTaskStatus updates the status of a specific task in the plan.
+// Caller must hold the level mutex.
 func (o *Orchestrator) updateTaskStatus(plan *orchestration.ExecutionPlan, taskID string, status orchestration.DAGTaskStatus) {
 	for i := range plan.Tasks {
 		if plan.Tasks[i].ID == taskID {
@@ -122,6 +145,7 @@ func (o *Orchestrator) updateTaskStatus(plan *orchestration.ExecutionPlan, taskI
 }
 
 // updateTaskResult stores the result on a specific task in the plan.
+// Caller must hold the level mutex.
 func (o *Orchestrator) updateTaskResult(plan *orchestration.ExecutionPlan, taskID string, result *domain.Result) {
 	for i := range plan.Tasks {
 		if plan.Tasks[i].ID == taskID {

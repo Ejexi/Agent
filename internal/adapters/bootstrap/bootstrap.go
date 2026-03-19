@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/adapters/translator"
 	warden_adapter "github.com/SecDuckOps/agent/internal/adapters/warden"
 	"github.com/SecDuckOps/agent/internal/application/taskengine"
+	"github.com/SecDuckOps/agent/internal/agent"
 	"github.com/SecDuckOps/agent/internal/config"
 	domain_security "github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/kernel"
@@ -66,26 +66,29 @@ import (
 
 // App holds the initialized application components.
 type App struct {
-	Kernel       *kernel.Kernel
-	Sessions     ports.SessionManager    // Subagent tracker
-	AppSessions  ports.AppSessionManager // Main workspace sessions
-	Provider     string
-	Model        string
-	Logger       shared_ports.Logger
-	EventBus     ports.EventBusPort
+	Kernel        *kernel.Kernel
+	Sessions      ports.SessionManager    // Subagent tracker (LLM sessions)
+	AppSessions   ports.AppSessionManager // Main workspace sessions
+	MasterAgent   *agent.MasterAgent      // Scan orchestrator
+	DuckOpsAgent  *agent.DuckOpsAgent     // Conversational CLI agent
+	Provider      string
+	Model         string
+	Logger        shared_ports.Logger
+	EventBus      ports.EventBusPort
 	SkillRegistry domain_skills.Registry
-	Shutdown     func()
+	Shutdown      func()
 }
 
 // FromTOML bootstraps the application from ~/.duckops/config.toml.
-func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
+func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	dir, _ := config.DuckOpsDir()
 	logPath := filepath.Join(dir, "duckops.log")
 
 	appLogger, err := logger.New("duckops-agent", "info", logPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
+		cancel()
+		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
 	// Initialize the EventBus
@@ -97,7 +100,8 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 	profile, ok := tomlCfg.GetProfile("default")
 	if !ok {
 		appLogger.ErrorErr(ctx, fmt.Errorf("agent_config_failed"), "No 'default' profile found in config.toml")
-		log.Fatal("No 'default' profile found in config.toml")
+		cancel()
+		return nil, fmt.Errorf("no 'default' profile found in config.toml")
 	}
 
 	// Create initial Agent workspace session
@@ -148,7 +152,11 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 	}
 	// ---------------------------------------------------------
 
-	llmRegistry := buildLLMRegistry(profile, appLogger)
+	llmRegistry, err := buildLLMRegistry(profile, appLogger)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 
 	// Initialize Warden (Cedar policy evaluator)
 	useDefaultDeny := true
@@ -198,7 +206,8 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 	k := kernel.New(deps)
 	if k == nil {
 		appLogger.ErrorErr(ctx, fmt.Errorf("kernel_init_failed"), "Kernel initialization failed")
-		log.Fatal("Kernel initialization failed")
+		cancel()
+		return nil, fmt.Errorf("kernel initialization failed: tool registry is nil")
 	}
 
 	// Tracker (implements ports.SessionManager)
@@ -208,7 +217,9 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 		LLMRegistry:  llmRegistry,
 	}
 
-	// Initialize Secret Scanner
+	// secretScanner is intentionally nil here — secret scanning is opt-in via config.
+	// When SecretsConfig is enabled in the profile, initialize the scanner here.
+	// TODO: Initialize from profile.Secrets config when SecretsConfig.Enabled == true
 	var secretScanner ports.SecretScannerPort
 
 
@@ -264,10 +275,41 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 			detectsecrets.NewDetectSecretsParser(),
 		}
 		scannerSvc = aggregator.NewScannerService(dockerWarden, parsers)
+		
+		// Wire container garbage collection to the Tracker lifecycle
+		tracker.OnSessionComplete = func(sessionID string) {
+			// Run cleanup in background so it doesn't block the session termination
+			go func() {
+				err := scannerSvc.CleanupSession(context.Background(), sessionID)
+				if err != nil {
+					appLogger.ErrorErr(context.Background(), err, "Failed to cleanup scanner containers for session", shared_ports.Field{Key: "session_id", Value: sessionID})
+				} else {
+					appLogger.Info(context.Background(), "Cleaned up persistent scanner containers", shared_ports.Field{Key: "session_id", Value: sessionID})
+				}
+			}()
+		}
 	}
 
 	// Register tools
-	skillRegistry := registerTools(ctx, toolRegistry, deps, tracker, bridge, capabilityRegistry, profile, appLogger, scannerSvc)
+	skillRegistry, err := registerTools(ctx, toolRegistry, deps, tracker, bridge, capabilityRegistry, profile, appLogger, scannerSvc)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	// Initialize MasterAgent (scan orchestrator)
+	// Pass the default LLM provider for intelligent scanner selection
+	var masterLLM llm_domain.LLM
+	if llmRegistry != nil {
+		masterLLM = llmRegistry.Default()
+	}
+	masterAgent := agent.NewMasterAgent(scannerSvc, masterLLM, appLogger)
+
+	// Initialize ReportAgent (local formatter + optional cloud push)
+	reportAgent := agent.NewReportAgent(nil, appLogger) // cloud client wired in Phase 4
+
+	// Initialize DuckOpsAgent (conversational CLI)
+	duckOpsAgent := agent.NewDuckOpsAgent(masterAgent, reportAgent, appLogger)
 
 	provider := profile.Provider
 	if provider == "" {
@@ -282,17 +324,25 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) *App {
 		Kernel:        k,
 		Sessions:      tracker,
 		AppSessions:   appSessionManager,
+		MasterAgent:   masterAgent,
+		DuckOpsAgent:  duckOpsAgent,
 		Provider:      provider,
 		Model:         profile.Model,
 		Logger:        appLogger,
 		EventBus:      eventBus,
 		SkillRegistry: skillRegistry,
-		Shutdown:      cancel,
-	}
+		Shutdown: func() {
+			appLogger.Info(context.Background(), "🛑 Stopping DuckOps Agent & Cleaning up Managed Resources...")
+			if scannerSvc != nil {
+				_ = scannerSvc.CleanupAllManagedContainers(context.Background())
+			}
+			cancel()
+		},
+	}, nil
 }
 
 // buildLLMRegistry bridges TOML providers → shared LLM registry.
-func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm_domain.LLMRegistry {
+func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) (llm_domain.LLMRegistry, error) {
 	sharedCfg := llm_domain.Config{
 		Default:   profile.Provider,
 		Providers: make(map[string]llm_domain.ProviderConfig),
@@ -308,7 +358,7 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 	llmRegistry, err := application.NewLLMRegistry(sharedCfg)
 	if err != nil {
 		appLogger.ErrorErr(context.Background(), err, "Failed to initialize LLM Registry")
-		log.Fatalf("Failed to initialize LLM Registry: %v", err)
+		return nil, fmt.Errorf("failed to initialize LLM registry: %w", err)
 	}
 
 	// Gemini special handling (uses native SDK, not OpenAI-compatible)
@@ -325,11 +375,11 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) llm
 		}
 	}
 
-	return llmRegistry
+	return llmRegistry, nil
 }
 
 // registerTools registers all agent tools with the kernel.
-func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps kernel.Dependencies, tracker *sa.Tracker, bridge *sa.KernelBridge, registry *sa.CapabilityRegistry, profile config.Profile, appLogger shared_ports.Logger, scannerSvc *aggregator.ScannerService) domain_skills.Registry {
+func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps kernel.Dependencies, tracker *sa.Tracker, bridge *sa.KernelBridge, registry *sa.CapabilityRegistry, profile config.Profile, appLogger shared_ports.Logger, scannerSvc *aggregator.ScannerService) (domain_skills.Registry, error) {
 	// Setup Hexagonal Task Engine Middleware Pipeline
 	osTranslator := translator.NewOSTranslatorAdapter("") // default to current OS
 	
@@ -371,9 +421,9 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 	for _, t := range tools {
 		if t.err != nil {
 			appLogger.ErrorErr(context.Background(), t.err, "Tool registration failed", shared_ports.Field{Key: "tool", Value: t.name})
-			log.Fatalf("%s tool registration failed: %v", t.name, t.err)
+			return nil, fmt.Errorf("tool registration failed for %s: %w", t.name, t.err)
 		}
 	}
 
-	return skillRegistry
+	return skillRegistry, nil
 }

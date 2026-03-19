@@ -271,19 +271,16 @@ func (a *SessionActor) Run() error {
 		}
 
 		// ===== Scrub Secrets Before LLM =====
-		promptText := "No prompt generated yet"
-		if len(messages) > 0 {
-			promptText = messages[len(messages)-1].Content
-		}
-
+		// Only scrub the last message (the one we're about to send).
+		// pm is scoped per-iteration so Restore always matches the correct Scrub call.
 		var pm security.PlaceholderMap
-		if a.secretScanner != nil {
-			var scrubbed string
-			scrubbed, pm = a.secretScanner.Scrub(a.session.Subagent.SessionID, promptText)
-			if scrubbed != promptText {
-				messages[len(messages)-1].Content = scrubbed
-				// Less noisy logging internally
+		if a.secretScanner != nil && len(messages) > 0 {
+			lastIdx := len(messages) - 1
+			scrubbed, scrubbedPm := a.secretScanner.Scrub(a.session.Subagent.SessionID, messages[lastIdx].Content)
+			if scrubbed != messages[lastIdx].Content {
+				messages[lastIdx].Content = scrubbed
 			}
+			pm = scrubbedPm
 		}
 
 		// ===== Call LLM =====

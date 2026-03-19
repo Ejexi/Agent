@@ -2,6 +2,9 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -34,13 +37,74 @@ type toastDismissMsg struct{}
 // ── Agent command ───────────────────────────────────────────────────
 
 func (m model) runAgent(userInput string) tea.Cmd {
+	// Expand @file mentions → inject file content into the prompt
+	expanded := expandMentions(userInput)
 	return func() tea.Msg {
-		ch, err := m.engine.StreamChat(context.Background(), userInput)
+		ch, err := m.engine.StreamChat(context.Background(), expanded)
 		if err != nil {
 			return agentResponseMsg{err: err}
 		}
 		return agentStreamMsg{ch: ch}
 	}
+}
+
+// expandMentions replaces @path/to/file tokens with the file's content.
+// Supports: @file.go  @./relative/path  @/absolute/path
+// Files that don't exist or are too large (>100KB) are left as-is with a note.
+func expandMentions(input string) string {
+	words := strings.Fields(input)
+	hasAtMention := false
+	for _, w := range words {
+		if strings.HasPrefix(w, "@") && len(w) > 1 {
+			hasAtMention = true
+			break
+		}
+	}
+	if !hasAtMention {
+		return input
+	}
+
+	var sb strings.Builder
+	for i, word := range words {
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		if !strings.HasPrefix(word, "@") || len(word) <= 1 {
+			sb.WriteString(word)
+			continue
+		}
+
+		filePath := strings.TrimPrefix(word, "@")
+
+		// Resolve relative paths from cwd
+		if !filepath.IsAbs(filePath) {
+			cwd, _ := os.Getwd()
+			filePath = filepath.Join(cwd, filePath)
+		}
+
+		info, err := os.Stat(filePath)
+		if err != nil {
+			// File not found — keep token, let agent handle it
+			sb.WriteString(word)
+			continue
+		}
+
+		const maxSize = 100 * 1024 // 100KB
+		if info.Size() > maxSize {
+			sb.WriteString(fmt.Sprintf("[%s: file too large to inline (%d bytes)]", word, info.Size()))
+			continue
+		}
+
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			sb.WriteString(word)
+			continue
+		}
+
+		ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
+		sb.WriteString(fmt.Sprintf("\n\n[Contents of %s]\n```%s\n%s\n```\n", filePath, ext, string(content)))
+	}
+	return sb.String()
 }
 
 type agentStreamMsg struct {
@@ -192,13 +256,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.wrappedCache = nil // Invalidate cache
-		
+		m.wrappedCache = nil
+
 		if m.stayAtBottom {
 			m.scroll = 0
 		}
 
-		// Update textarea width to prevent weird text wrapping
 		w := m.width - 6
 		if m.showSidePanel {
 			w -= components.SidePanelWidth
@@ -207,8 +270,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w = 10
 		}
 		m.textarea.SetWidth(w)
-		
-		// Update sub-models that depend on size
 		m.shell, _ = m.shell.Update(msg)
 		return m, nil
 
@@ -261,19 +322,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.discoveryIndex >= len(m.discoveryResults) {
 			m.discoveryIndex = 0
 		}
-	} else if strings.HasPrefix(val, "@") {
+	} else if atQuery := extractAtQuery(val); atQuery != "" {
+		// @ can appear anywhere in the input: "review @file.go" works too
 		if m.mode != FileDiscoveryMode {
 			m.mode = FileDiscoveryMode
 			m.discoveryIndex = 0
 		}
-		query := strings.TrimPrefix(val, "@")
-		m.discoveryResults = m.discovery.SearchFiles(query)
+		m.discoveryResults = m.discovery.SearchFiles(atQuery)
 		if m.discoveryIndex >= len(m.discoveryResults) {
 			m.discoveryIndex = 0
 		}
 	} else {
-		m.mode = ChatMode
-		m.discoveryResults = nil
+		if m.mode == FileDiscoveryMode || m.mode == ShellDiscoveryMode {
+			m.mode = ChatMode
+			m.discoveryResults = nil
+		}
 	}
 
 	// ── Command Menu Sync ──────────────────────────────────────────
@@ -366,12 +429,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case tea.KeyTab:
 			if len(m.discoveryResults) > 0 {
-				prefix := "!"
-				if m.mode == FileDiscoveryMode {
-					prefix = "@"
-				}
 				selected := m.discoveryResults[m.discoveryIndex].Name
-				m.textarea.SetValue(prefix + selected + " ")
+				current := m.textarea.Value()
+
+				if m.mode == FileDiscoveryMode {
+					// Replace only the @query token, preserve rest of the input
+					atIdx := strings.LastIndex(current, "@")
+					if atIdx >= 0 {
+						before := current[:atIdx]
+						m.textarea.SetValue(before + "@" + selected + " ")
+					} else {
+						m.textarea.SetValue("@" + selected + " ")
+					}
+				} else {
+					// Shell (!command) mode — replace whole input
+					m.textarea.SetValue("!" + selected + " ")
+				}
 				m.textarea.CursorEnd()
 				return m, nil
 			}
@@ -525,23 +598,83 @@ func (m model) handleMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyEnter:
 		if len(items) == 0 {
-			// If nothing matches, just close the menu and let them keep typing.
 			m.showMenu = false
 			return m, nil
 		}
 		selectedCmd := items[m.menuSelection].Command
 		m.showMenu = false
-		m.messages = append(m.messages, Message{
-			Type:      UserMsg,
-			Content:   selectedCmd,
-			Sender:    "You",
-			Timestamp: time.Now(),
-		})
 		m.textarea.Reset()
 		m.textarea.SetHeight(1)
-		m.isProcessing = true
-		m.loading = true
-		return m, tea.Batch(m.runAgent(selectedCmd), m.spinner.Tick)
+
+		// Handle slash commands locally before hitting the agent
+		switch selectedCmd {
+		case "/clear":
+			m.messages = nil
+			return m, nil
+
+		case "/help":
+			m.messages = append(m.messages, Message{
+				Type:      UserMsg,
+				Content:   selectedCmd,
+				Sender:    "You",
+				Timestamp: time.Now(),
+			})
+			m.messages = append(m.messages, Message{
+				Type:      AgentMsg,
+				Content:   helpSlashContent(),
+				Sender:    "DuckOps",
+				Timestamp: time.Now(),
+			})
+			return m, nil
+
+		case "/status":
+			m.messages = append(m.messages, Message{
+				Type:      UserMsg,
+				Content:   selectedCmd,
+				Sender:    "You",
+				Timestamp: time.Now(),
+			})
+			m.isProcessing = true
+			m.loading = true
+			return m, tea.Batch(m.runAgent("What is the current system status? Check Docker availability and list any active sessions."), m.spinner.Tick)
+
+		case "/scan":
+			m.messages = append(m.messages, Message{
+				Type:      UserMsg,
+				Content:   selectedCmd,
+				Sender:    "You",
+				Timestamp: time.Now(),
+			})
+			m.isProcessing = true
+			m.loading = true
+			return m, tea.Batch(m.runAgent("Run a full security scan on the current project directory."), m.spinner.Tick)
+
+		case "/vuln":
+			m.messages = append(m.messages, Message{
+				Type:      UserMsg,
+				Content:   selectedCmd,
+				Sender:    "You",
+				Timestamp: time.Now(),
+			})
+			m.isProcessing = true
+			m.loading = true
+			return m, tea.Batch(m.runAgent("Show me all known vulnerabilities and security findings for this project."), m.spinner.Tick)
+
+		case "/logout":
+			return m, tea.Quit
+
+		default:
+			// Unknown slash command → send to agent as natural language
+			m.messages = append(m.messages, Message{
+				Type:      UserMsg,
+				Content:   selectedCmd,
+				Sender:    "You",
+				Timestamp: time.Now(),
+			})
+			m.isProcessing = true
+			m.loading = true
+			return m, tea.Batch(m.runAgent(selectedCmd), m.spinner.Tick)
+		}
 	}
 
 	// Forward other keys (typing) to textarea
@@ -663,3 +796,66 @@ func (m *model) showSkillsTable() (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+
+// extractAtQuery finds the last @token in the input and returns the query after @.
+// Returns "" if no active @mention is found.
+// e.g. "review @main" → "main",  "hello world" → ""
+func extractAtQuery(input string) string {
+	atIdx := strings.LastIndex(input, "@")
+	if atIdx < 0 {
+		return ""
+	}
+	after := input[atIdx+1:]
+	// Must be contiguous (no space after @)
+	if strings.Contains(after, " ") {
+		return ""
+	}
+	return after
+}
+
+// helpSlashContent returns the help content for /help slash command.
+func helpSlashContent() string {
+	return `## 🦆 DuckOps Commands
+
+### Slash Commands
+| Command | Action |
+|---------|--------|
+| ` + "`/scan`" + ` | Full security scan on current project |
+| ` + "`/vuln`" + ` | Show all known vulnerabilities |
+| ` + "`/status`" + ` | System + Docker status |
+| ` + "`/clear`" + ` | Clear conversation |
+| ` + "`/tools`" + ` | List all available tools |
+| ` + "`/skills`" + ` | List all loaded skills |
+| ` + "`/logout`" + ` | Sign out |
+
+### @ File Mentions
+Type ` + "`@`" + ` followed by a filename to include its content in your message.
+Use **Tab** to autocomplete from the fuzzy search results.
+
+` + "```" + `
+@main.go review this file for security issues
+@./internal/auth/handler.go what does this do?
+` + "```" + `
+
+### ! Shell Commands
+Type ` + "`!`" + ` followed by any shell command to run it directly.
+
+` + "```" + `
+!ls -la
+!git log --oneline -10
+!docker ps
+` + "```" + `
+
+### Keyboard Shortcuts
+| Key | Action |
+|-----|--------|
+| ` + "`Enter`" + ` | Send message |
+| ` + "`Alt+Enter`" + ` | New line |
+| ` + "`Ctrl+C`" + ` | Quit / interrupt |
+| ` + "`Ctrl+B`" + ` | Toggle side panel |
+| ` + "`↑ / ↓`" + ` | Scroll messages |
+`
+}
+
+
+

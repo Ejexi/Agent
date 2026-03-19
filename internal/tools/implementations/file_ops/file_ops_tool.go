@@ -115,11 +115,11 @@ func (t *FileOpsTool) Execute(ctx context.Context, params FileOpsParams) (agent_
 		}
 		// Ensure directory exists
 		dir := filepath.Dir(absPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return domain.Result{Success: false, Error: fmt.Sprintf("failed to create directories: %v", err)}, nil
 		}
 
-		err := os.WriteFile(absPath, []byte(params.Content), 0644)
+		err := os.WriteFile(absPath, []byte(params.Content), 0600)
 		if err != nil {
 			return domain.Result{Success: false, Error: fmt.Sprintf("failed to create file: %v", err)}, nil
 		}
@@ -146,7 +146,7 @@ func (t *FileOpsTool) Execute(ctx context.Context, params FileOpsParams) (agent_
 
 		newContent := strings.Replace(content, params.TargetText, params.ReplacementText, 1)
 
-		err = os.WriteFile(absPath, []byte(newContent), 0644)
+		err = os.WriteFile(absPath, []byte(newContent), 0600)
 		if err != nil {
 			return domain.Result{Success: false, Error: fmt.Sprintf("failed to write updated file: %v", err)}, nil
 		}

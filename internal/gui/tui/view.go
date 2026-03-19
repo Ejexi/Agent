@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/SecDuckOps/agent/internal/gui/tui/components"
@@ -17,17 +18,26 @@ func (m model) View() string {
 	// (Handled inside content stacking below)
 
 	// ── Protect against very small terminals ────────────────────────
-	if m.width < 20 || m.height < 8 {
+	if m.width < minTerminalWidth || m.height < minTerminalHeight {
+		msg := fmt.Sprintf("Terminal too small (%dx%d)\nMinimum: %dx%d",
+			m.width, m.height, minTerminalWidth, minTerminalHeight)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			lipgloss.NewStyle().Foreground(Theme.Warning).Render("Terminal too small"))
+			lipgloss.NewStyle().
+				Foreground(Theme.Warning).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(Theme.Warning).
+				Padding(1, 2).
+				Render(msg),
+		)
 	}
 
-	// ── Calculate main content width ────────────────────────────────
+	// ── Calculate main content width — fluid, fills terminal ────────
 	mainW := m.width
 	if m.showSidePanel {
 		mainW = m.width - components.SidePanelWidth
-		if mainW < 20 {
-			mainW = 20
+		if mainW < 30 {
+			// panel would make chat too narrow — hide it
+			mainW = m.width
 		}
 	}
 

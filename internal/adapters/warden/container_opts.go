@@ -9,6 +9,30 @@ import (
 	"github.com/docker/docker/api/types/network"
 )
 
+// scannerCacheVolumes maps scanner names to their cache directories inside containers.
+// A Docker Named Volume ("duckops-cache-<scanner>") is mounted at each path
+// so vulnerability databases and rule sets persist across ephemeral container runs.
+var scannerCacheVolumes = map[string]string{
+	"trivy":           "/root/.cache/trivy",
+	"semgrep":         "/root/.semgrep",
+	"grype":           "/root/.cache/grype",
+	"gitleaks":        "/root/.cache/gitleaks",
+	"trufflehog":      "/root/.trufflehog",
+	"gosec":           "/root/.cache/gosec",
+	"bandit":          "/root/.cache/bandit",
+	"tfsec":           "/root/.cache/tfsec",
+	"checkov":         "/root/.cache/checkov",
+	"kics":            "/root/.cache/kics",
+	"terrascan":       "/root/.cache/terrascan",
+	"nuclei":          "/root/.config/nuclei",
+	"osvscanner":      "/root/.cache/osv-scanner",
+	"dependencycheck": "/usr/share/dependency-check/data",
+	"brakeman":        "/root/.cache/brakeman",
+	"tflint":          "/root/.tflint.d",
+	"detectsecrets":   "/root/.cache/detect-secrets",
+	"zap":             "/root/.ZAP",
+}
+
 // buildContainerConfig constructs the secure container and host config
 func buildContainerConfig(opts ports.ScanOpts, resolvedImage string) (*container.Config, *container.HostConfig, *network.NetworkingConfig) {
 
@@ -51,10 +75,21 @@ func buildContainerConfig(opts ports.ScanOpts, resolvedImage string) (*container
 			{
 				Type:     mount.TypeBind,
 				Source:   targetAbs,
-				Target:   "/scan/workspace", // Updated: Target directory is ALWAYS read-only
-				ReadOnly: true,              // Target directory is ALWAYS read-only
+				Target:   "/scan/workspace", // Target directory is ALWAYS read-only
+				ReadOnly: true,
 			},
 		},
+	}
+
+	// Append persistent cache volume if scanner has a known cache path.
+	// The Docker Named Volume ("duckops-cache-<scanner>") survives container
+	// removal, so vulnerability DBs and rule caches are downloaded only once.
+	if cachePath, ok := scannerCacheVolumes[opts.Scanner]; ok {
+		hostCfg.Mounts = append(hostCfg.Mounts, mount.Mount{
+			Type:   mount.TypeVolume,
+			Source: "duckops-cache-" + opts.Scanner,
+			Target: cachePath,
+		})
 	}
 
 	netCfg := &network.NetworkingConfig{}

@@ -17,6 +17,10 @@ var (
 	todoCounter    int
 )
 
+// NOTE: globalTodoList is intentionally process-scoped (shared across sessions within one agent run).
+// This matches the tool's design: todos act as a shared scratchpad for the agent's current session.
+// A future improvement could scope todos per session by storing them in a map[sessionID][]TodoItem.
+
 type TodoItem struct {
 	ID          int       `json:"id"`
 	Description string    `json:"description"`

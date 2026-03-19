@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/SecDuckOps/agent/internal/adapters/bootstrap"
 	"github.com/SecDuckOps/agent/internal/adapters/server"
 	"github.com/SecDuckOps/agent/internal/config"
-	"github.com/SecDuckOps/shared/types"
 )
 
 // Build-time variables (set via -ldflags)
@@ -20,31 +21,67 @@ var (
 )
 
 var (
-	cfgFile string
-	verbose bool
-	cliMode bool
+	cfgFile  string
+	verbose  bool
+	cliMode  bool
+	scanMode bool
+)
+
+// Exit codes per Phase 3 spec
+const (
+	exitOK          = 0 // clean — no findings at/above fail_on severity
+	exitFindings    = 1 // findings found at/above fail_on severity
+	exitDockerError = 2 // Docker unavailable or scan crashed
+	exitConfigError = 3 // config error
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "duckops",
-	Short: "DuckOps — DevSecOps AI Agent",
-	Long: `DuckOps is a Stand Duck AI agent for DevSecOps.
-It lives on your machine, keeps your apps running, 
-and only pings when it needs a human.`,
+	Use:          "duckops",
+	Short:        "DuckOps — DevSecOps AI Agent",
+	Long:         "DuckOps is a DevSecOps AI agent. Just type what you want — it figures out the rest.",
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// 1. Load config — exit(3) on failure
 		tomlCfg, err := config.LoadTOML()
 		if err != nil {
-			return types.Wrap(err, types.ErrCodeInternal, "failed to load config")
+			fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
+			os.Exit(exitConfigError)
 		}
 
-		app := bootstrap.FromTOML(context.Background(), tomlCfg)
+		// 2. Bootstrap — exit(2) if init fails
+		app, err := bootstrap.FromTOML(context.Background(), tomlCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Initialization error: %v\n", err)
+			os.Exit(exitDockerError)
+		}
 		defer app.Shutdown()
 
-		// Start HTTP/SSE server in background
+		// 3. Background warm-up (non-blocking — does not delay the prompt)
+		if app.DuckOpsAgent != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+				app.DuckOpsAgent.WarmupAll(ctx)
+			}()
+		}
+
+		// 4. Decide mode
+		if scanMode {
+			// Conversational scan agent REPL (Phase 3)
+			app.DuckOpsAgent.Run(context.Background())
+			return nil
+		}
+
+		if cliMode {
+			// Legacy LLM REPL
+			runInteractive(app.Kernel, app.Provider, "DuckOps")
+			return nil
+		}
+
+		// Default: HTTP server in background + TUI in foreground
 		addr := tomlCfg.Settings.ServerAddr
 		if addr == "" {
-			addr = ":8090" //api_endpoint
+			addr = ":8090"
 		}
 		srv := server.NewAgentServer(app.Sessions, addr, app.Logger)
 		go func() {
@@ -54,20 +91,15 @@ and only pings when it needs a human.`,
 			}
 		}()
 
-		if cliMode {
-			// Run REPL in foreground
-			runInteractive(app.Kernel, app.Provider, "Stand Duck")
-		} else {
-			actualModel := app.Model
-			if actualModel == "" && app.Kernel != nil && app.Kernel.Deps.LLM != nil {
-				if defaultLLM := app.Kernel.Deps.LLM.Get(app.Provider); defaultLLM != nil {
-					actualModel = defaultLLM.Model()
-				} else if defaultLLM = app.Kernel.Deps.LLM.Default(); defaultLLM != nil {
-					actualModel = defaultLLM.Model()
-				}
+		actualModel := app.Model
+		if actualModel == "" && app.Kernel != nil && app.Kernel.Deps.LLM != nil {
+			if defaultLLM := app.Kernel.Deps.LLM.Get(app.Provider); defaultLLM != nil {
+				actualModel = defaultLLM.Model()
+			} else if defaultLLM = app.Kernel.Deps.LLM.Default(); defaultLLM != nil {
+				actualModel = defaultLLM.Model()
 			}
-			runTUI(app.Kernel, actualModel, app.AppSessions, app.EventBus, app.SkillRegistry)
 		}
+		runTUI(app.Kernel, actualModel, app.AppSessions, app.EventBus, app.SkillRegistry)
 		return nil
 	},
 }
@@ -75,7 +107,8 @@ and only pings when it needs a human.`,
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.duckops/config.toml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
-	rootCmd.Flags().BoolVar(&cliMode, "cli", false, "launch the classic CLI REPL instead of the TUI")
+	rootCmd.Flags().BoolVar(&cliMode, "cli", false, "launch the LLM REPL")
+	rootCmd.Flags().BoolVar(&scanMode, "scan", false, "launch the conversational scan agent")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(serveCmd)
