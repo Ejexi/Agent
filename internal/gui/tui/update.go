@@ -161,44 +161,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgentEvent(msg.ch)
 
 	case subagent.SubagentEvent:
-		msgType := LearningMsg
 		content := msg.Message
-
 		if msg.Type == subagent.EventThought {
-			msgType = ThoughtMsg
 			content = strings.TrimPrefix(content, "Thinking: ")
 		}
-
-		m.messages = append(m.messages, Message{
-			Type:      msgType,
-			Content:   content,
-			Sender:    "DuckOps",
-			Timestamp: msg.Timestamp,
-		})
-		m.scroll = 0
-		m.stayAtBottom = true
+		m = appendAggregatedThought(m, content)
 		return m, waitForAgentEvent(m.lastStreamCh)
 
 	case engine.ThoughtEvent:
-		m.messages = append(m.messages, Message{
-			Type:      ThoughtMsg,
-			Content:   msg.Rationale,
-			Sender:    "DuckOps",
-			Timestamp: time.Now(),
-		})
-		m.scroll = 0
-		m.stayAtBottom = true
+		m = appendAggregatedThought(m, msg.Rationale)
 		return m, waitForAgentEvent(m.lastStreamCh)
 
 	case engine.ReflectionEvent:
-		m.messages = append(m.messages, Message{
-			Type:      ReflectionMsg,
-			Content:   msg.Reflection,
-			Sender:    "DuckOps",
-			Timestamp: time.Now(),
-		})
-		m.scroll = 0
-		m.stayAtBottom = true
+		m = appendAggregatedThought(m, msg.Reflection)
 		return m, waitForAgentEvent(m.lastStreamCh)
 
 	// ── Agent response (Final Result) ────────────────────────────────
@@ -748,7 +723,7 @@ func (m *model) showToolsTable() (tea.Model, tea.Cmd) {
 		{"4", "grep_search", "Deep grep search across the codebase"},
 		{"5", "list_dir", "List files and subdirectories structurally"},
 		{"6", "run_command", "Execute shell commands securely in DuckOps workspace"},
-		{"7", "docker_warden", "Spins up ephemeral sandboxed Docker containers"},
+		{"7", "mcp_servers", "External tool servers (GitHub, filesystem, scanners…)"},
 		{"8", "sast_scanner", "Runs targeted SAST (Semgrep, Trivy, Gosec) against codebase"},
 	}
 
@@ -857,5 +832,29 @@ Type ` + "`!`" + ` followed by any shell command to run it directly.
 `
 }
 
+func appendAggregatedThought(m model, content string) model {
+	text := "- " + strings.ReplaceAll(strings.TrimSpace(content), "\n", "\n  ")
+	if len(m.messages) > 0 {
+		lastIdx := len(m.messages) - 1
+		lastType := m.messages[lastIdx].Type
+		if lastType == ThoughtMsg || lastType == LearningMsg || lastType == ReflectionMsg {
+			m.messages[lastIdx].Type = ThoughtMsg
+			m.messages[lastIdx].Content += "\n" + text
+			m.scroll = 0
+			m.stayAtBottom = true
+			return m
+		}
+	}
+
+	m.messages = append(m.messages, Message{
+		Type:      ThoughtMsg,
+		Content:   text,
+		Sender:    "DuckOps",
+		Timestamp: time.Now(),
+	})
+	m.scroll = 0
+	m.stayAtBottom = true
+	return m
+}
 
 

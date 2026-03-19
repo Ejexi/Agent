@@ -9,14 +9,17 @@ import (
 	"github.com/SecDuckOps/agent/internal/adapters/configsync"
 	"github.com/SecDuckOps/agent/internal/adapters/events"
 	"github.com/SecDuckOps/agent/internal/adapters/executor"
+	mcp_adapter "github.com/SecDuckOps/agent/internal/adapters/mcp"
+	checkpoint_adapter "github.com/SecDuckOps/agent/internal/adapters/checkpoint"
 	"github.com/SecDuckOps/agent/internal/adapters/security"
-	agent_app "github.com/SecDuckOps/agent/internal/application"
 	sa "github.com/SecDuckOps/agent/internal/adapters/subagent"
 	"github.com/SecDuckOps/agent/internal/adapters/translator"
 	warden_adapter "github.com/SecDuckOps/agent/internal/adapters/warden"
+	agent_app "github.com/SecDuckOps/agent/internal/application"
 	"github.com/SecDuckOps/agent/internal/application/taskengine"
 	"github.com/SecDuckOps/agent/internal/agent"
 	"github.com/SecDuckOps/agent/internal/config"
+	mcp_domain "github.com/SecDuckOps/agent/internal/domain/mcp"
 	domain_security "github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	"github.com/SecDuckOps/agent/internal/ports"
@@ -24,59 +27,43 @@ import (
 	"github.com/SecDuckOps/agent/internal/tools/implementations/delegate"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/file_ops"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/filesystem"
+	mcp_tool "github.com/SecDuckOps/agent/internal/tools/implementations/mcp_tool"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/search"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/notes"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/reporting"
-	"github.com/SecDuckOps/agent/internal/tools/implementations/scan"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/skills"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/subagent"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/terminal"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/todo"
+	"github.com/SecDuckOps/agent/internal/tools/implementations/web_search"
 	domain_skills "github.com/SecDuckOps/agent/internal/skills"
 	"github.com/google/uuid"
 
 	"time"
 
-	"github.com/SecDuckOps/shared/llm/application"
+	llm_application "github.com/SecDuckOps/shared/llm/application"
 	llm_domain "github.com/SecDuckOps/shared/llm/domain"
 	"github.com/SecDuckOps/shared/llm/infrastructure"
 	"github.com/SecDuckOps/shared/logger"
 	shared_ports "github.com/SecDuckOps/shared/ports"
-	"github.com/SecDuckOps/shared/scanner/aggregator"
-	"github.com/SecDuckOps/shared/scanner/parsers/container/grype"
-	"github.com/SecDuckOps/shared/scanner/parsers/container/trivy"
-	"github.com/SecDuckOps/shared/scanner/parsers/dast/nuclei"
-	"github.com/SecDuckOps/shared/scanner/parsers/dast/zap"
-	"github.com/SecDuckOps/shared/scanner/parsers/dependency/dependencycheck"
-	"github.com/SecDuckOps/shared/scanner/parsers/dependency/osvscanner"
-	"github.com/SecDuckOps/shared/scanner/parsers/iac/checkov"
-	"github.com/SecDuckOps/shared/scanner/parsers/iac/kics"
-	"github.com/SecDuckOps/shared/scanner/parsers/iac/terrascan"
-	"github.com/SecDuckOps/shared/scanner/parsers/iac/tflint"
-	"github.com/SecDuckOps/shared/scanner/parsers/iac/tfsec"
-	"github.com/SecDuckOps/shared/scanner/parsers/sast/bandit"
-	"github.com/SecDuckOps/shared/scanner/parsers/sast/brakeman"
-	"github.com/SecDuckOps/shared/scanner/parsers/sast/gosec"
-	"github.com/SecDuckOps/shared/scanner/parsers/sast/njsscan"
-	"github.com/SecDuckOps/shared/scanner/parsers/sast/semgrep"
-	"github.com/SecDuckOps/shared/scanner/parsers/secrets/detectsecrets"
-	"github.com/SecDuckOps/shared/scanner/parsers/secrets/gitleaks"
-	"github.com/SecDuckOps/shared/scanner/parsers/secrets/trufflehog"
 	scanner_ports "github.com/SecDuckOps/shared/scanner/ports"
 )
 
 // App holds the initialized application components.
 type App struct {
-	Kernel        *kernel.Kernel
-	Sessions      ports.SessionManager    // Subagent tracker (LLM sessions)
-	AppSessions   ports.AppSessionManager // Main workspace sessions
-	MasterAgent   *agent.MasterAgent      // Scan orchestrator
-	DuckOpsAgent  *agent.DuckOpsAgent     // Conversational CLI agent
-	Provider      string
-	Model         string
-	Logger        shared_ports.Logger
-	EventBus      ports.EventBusPort
-	SkillRegistry domain_skills.Registry
-	Shutdown      func()
+	Kernel          *kernel.Kernel
+	Sessions        ports.SessionManager
+	AppSessions     ports.AppSessionManager
+	MasterAgent     *agent.MasterAgent
+	DuckOpsAgent    *agent.DuckOpsAgent
+	MCPClient       ports.MCPClientPort
+	CheckpointStore *checkpoint_adapter.Store // nil if init failed
+	Provider        string
+	Model           string
+	Logger          shared_ports.Logger
+	EventBus        ports.EventBusPort
+	SkillRegistry   domain_skills.Registry
+	Shutdown        func()
 }
 
 // FromTOML bootstraps the application from ~/.duckops/config.toml.
@@ -91,45 +78,33 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
-	// Initialize the EventBus
 	eventBus := events.NewInMemoryEventBus(appLogger)
-
-	// Initialize App Session Manager (Phase 1 Enhancements)
 	appSessionManager := agent_app.NewSessionManagerService(appLogger, eventBus)
-	
+
 	profile, ok := tomlCfg.GetProfile("default")
 	if !ok {
-		appLogger.ErrorErr(ctx, fmt.Errorf("agent_config_failed"), "No 'default' profile found in config.toml")
 		cancel()
 		return nil, fmt.Errorf("no 'default' profile found in config.toml")
 	}
 
-	// Create initial Agent workspace session
 	cwd, _ := os.Getwd()
 	_, err = appSessionManager.CreateSession(ctx, cwd, tomlCfg.Settings.AgentMode, profile.Model)
 	if err != nil {
 		appLogger.ErrorErr(ctx, err, "Failed to create root agent session")
 	}
 
-	// Capability Registry holds injected subagent profiles
 	capabilityRegistry := sa.NewCapabilityRegistry()
 
-	// ---------------------------------------------------------
-	// Super Duck LOGIC
-	// ---------------------------------------------------------
+	// ── Super Duck: remote config sync ──────────────────────────────────────
 	if tomlCfg.Settings.AgentMode == "super" {
-		appLogger.Info(ctx, "⚡ Starting in Super Duck. Connecting to API Gateway...", shared_ports.Field{Key: "url", Value: tomlCfg.Settings.APIGatewayURL})
+		appLogger.Info(ctx, "Starting in Super Duck mode", shared_ports.Field{Key: "url", Value: tomlCfg.Settings.APIGatewayURL})
 		syncAdapter := configsync.NewHTTPAdapter(tomlCfg.Settings.APIGatewayURL, "") // TODO: API Key
-
 		remoteCfg, err := syncAdapter.FetchRemoteConfig(ctx)
 		if err != nil {
-			appLogger.ErrorErr(ctx, err, "Failed to fetch remote config on startup, falling back to local config")
+			appLogger.ErrorErr(ctx, err, "Failed to fetch remote config, falling back to local")
 		} else {
-			appLogger.Info(ctx, "Successfully fetched remote config", shared_ports.Field{Key: "rules_count", Value: len(remoteCfg.Rules)})
 			capabilityRegistry.Sync(remoteCfg.Capabilities)
-			// TODO: Merge remoteCfg into local profile
 		}
-
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
@@ -143,29 +118,26 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 						appLogger.ErrorErr(ctx, err, "Periodic config sync failed")
 					} else {
 						capabilityRegistry.Sync(cfg.Capabilities)
-						// silent success, no need to spam logs unless changed
-						// TODO: Apply updates to running kernel dynamically
 					}
 				}
 			}
 		}()
 	}
-	// ---------------------------------------------------------
 
+	// ── LLM Registry ─────────────────────────────────────────────────────────
 	llmRegistry, err := buildLLMRegistry(profile, appLogger)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 
-	// Initialize Warden (Cedar policy evaluator)
+	// ── Warden (Cedar policy evaluator — KEEP for shell/fs policy) ───────────
 	useDefaultDeny := true
 	if profile.Warden != nil {
 		useDefaultDeny = profile.Warden.DefaultDeny
 	}
 	wardenInstance := warden_adapter.New(useDefaultDeny, appLogger)
 
-	// Load policies
 	var policies []domain_security.NetworkPolicy
 	if profile.Warden != nil && len(profile.Warden.PolicyFiles) > 0 {
 		for _, path := range profile.Warden.PolicyFiles {
@@ -175,26 +147,19 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 				continue
 			}
 			policies = append(policies, domain_security.NetworkPolicy{
-				ID:        uuid.New().String(),
-				Name:      filepath.Base(path),
-				CedarBody: string(content),
-				Enabled:   true,
-				Priority:  10,
+				ID: uuid.New().String(), Name: filepath.Base(path),
+				CedarBody: string(content), Enabled: true, Priority: 10,
 			})
 		}
 	}
-
 	if err := wardenInstance.LoadPolicies(ctx, policies); err != nil {
 		appLogger.ErrorErr(ctx, err, "Failed to load Warden policies")
 	}
 
-	// Setup OS adapters for the kernel and dispatcher
+	// ── OS executor ──────────────────────────────────────────────────────────
 	osExecutor := executor.NewOSExecAdapter(appLogger)
-
-	// Tools (Phase 2 Enhancements)
 	toolRegistry := agent_app.NewToolRegistryService(appLogger)
 
-	// Kernel
 	deps := kernel.Dependencies{
 		ToolRegistry:   toolRegistry,
 		LLM:            llmRegistry,
@@ -205,143 +170,105 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 	}
 	k := kernel.New(deps)
 	if k == nil {
-		appLogger.ErrorErr(ctx, fmt.Errorf("kernel_init_failed"), "Kernel initialization failed")
 		cancel()
-		return nil, fmt.Errorf("kernel initialization failed: tool registry is nil")
+		return nil, fmt.Errorf("kernel initialization failed")
 	}
 
-	// Tracker (implements ports.SessionManager)
 	bridge := &sa.KernelBridge{
 		ExecuteFn:    k.ExecuteCompat,
 		GetSchemasFn: k.GetToolSchemas,
 		LLMRegistry:  llmRegistry,
 	}
 
-	// secretScanner is intentionally nil here — secret scanning is opt-in via config.
-	// When SecretsConfig is enabled in the profile, initialize the scanner here.
-	// TODO: Initialize from profile.Secrets config when SecretsConfig.Enabled == true
 	var secretScanner ports.SecretScannerPort
-
-
 	tracker := sa.NewTracker(bridge, bridge, secretScanner, appLogger)
+	// Apply profile-level auto_approve tools to every spawned session
+	if len(profile.AutoApproveTools) > 0 {
+		tracker.AutoApproveTools = profile.AutoApproveTools
+		appLogger.Info(ctx, "Auto-approve tools loaded",
+			shared_ports.Field{Key: "tools", Value: profile.AutoApproveTools})
+	}
 
-	// Initialize Docker Warden (Scanner Port)
-	var dockerWarden *warden_adapter.DockerWarden
-	
-	dw, err := warden_adapter.NewDockerWarden()
-	if err != nil {
-		appLogger.ErrorErr(ctx, err, "Failed to initialize Docker Warden client. Container scans will not be available.")
+	// Wire checkpoint store — sessions persisted to ~/.duckops/sessions/
+	sessionsDir := filepath.Join(dir, "sessions")
+	var cpStore *checkpoint_adapter.Store
+	if store, err := checkpoint_adapter.NewStore(sessionsDir); err != nil {
+		appLogger.ErrorErr(ctx, err, "Failed to initialize checkpoint store — session history will not be persisted")
 	} else {
-		// Verify daemon connection
-		if err := dw.HealthCheck(ctx); err != nil {
-			appLogger.ErrorErr(ctx, err, "Docker Warden initial healthcheck failed. Trying to start Docker automatically...")
-			
-			// Attempt to auto-start!
-			autoStartErr := warden_adapter.AutoStartDocker(ctx, appLogger, dw)
-			if autoStartErr != nil {
-				appLogger.ErrorErr(ctx, autoStartErr, "Failed to auto-start Docker. Container scans will not be available.")
-			} else {
-				dockerWarden = dw
-				appLogger.Info(ctx, "Docker Warden initialized successfully after auto-start")
-			}
-		} else {
-			dockerWarden = dw
-			appLogger.Info(ctx, "Docker Warden initialized successfully")
-		}
-	}
-	
-	// Initialize the Scanner Aggregator with all registered parsers
-	var scannerSvc *aggregator.ScannerService
-	if dockerWarden != nil {
-		parsers := []scanner_ports.ResultParserPort{
-			trivy.NewTrivyParser(),
-			semgrep.NewSemgrepParser(),
-			gitleaks.NewGitleaksParser(),
-			zap.NewZapParser(),
-			tfsec.NewTfsecParser(),
-			dependencycheck.NewDependencyCheckParser(),
-			gosec.NewGosecParser(),
-			bandit.NewBanditParser(),
-			njsscan.NewNjsscanParser(),
-			checkov.NewCheckovParser(),
-			trufflehog.NewTrufflehogParser(),
-			brakeman.NewBrakemanParser(),
-			kics.NewKicsParser(),
-			grype.NewGrypeParser(),
-			nuclei.NewNucleiParser(),
-			osvscanner.NewOsvScannerParser(),
-			terrascan.NewTerrascanParser(),
-			tflint.NewTflintParser(),
-			detectsecrets.NewDetectSecretsParser(),
-		}
-		scannerSvc = aggregator.NewScannerService(dockerWarden, parsers)
-		
-		// Wire container garbage collection to the Tracker lifecycle
-		tracker.OnSessionComplete = func(sessionID string) {
-			// Run cleanup in background so it doesn't block the session termination
-			go func() {
-				err := scannerSvc.CleanupSession(context.Background(), sessionID)
-				if err != nil {
-					appLogger.ErrorErr(context.Background(), err, "Failed to cleanup scanner containers for session", shared_ports.Field{Key: "session_id", Value: sessionID})
-				} else {
-					appLogger.Info(context.Background(), "Cleaned up persistent scanner containers", shared_ports.Field{Key: "session_id", Value: sessionID})
-				}
-			}()
-		}
+		cpStore = store
+		tracker.WithCheckpointStore(cpStore)
+		appLogger.Info(ctx, "Checkpoint store ready", shared_ports.Field{Key: "dir", Value: sessionsDir})
 	}
 
-	// Register tools
-	skillRegistry, err := registerTools(ctx, toolRegistry, deps, tracker, bridge, capabilityRegistry, profile, appLogger, scannerSvc)
+	// ── MCP Client ───────────────────────────────────────────────────────────
+	// Convert config entries to domain types
+	mcpConfigs := make([]mcp_domain.ServerConfig, len(tomlCfg.MCP.Servers))
+	for i, s := range tomlCfg.MCP.Servers {
+		mcpConfigs[i] = mcp_domain.ServerConfig{
+			Name: s.Name, Transport: s.Transport,
+			Command: s.Command, URL: s.URL,
+			Env: s.Env, AllowedTools: s.AllowedTools,
+			Enabled: s.Enabled,
+		}
+	}
+	mcpClient := mcp_adapter.NewClient(mcpConfigs, appLogger)
+	appLogger.Info(ctx, "MCP client initialized",
+		shared_ports.Field{Key: "connected_servers", Value: mcpClient.ConnectedServers()})
+
+	// ── MasterAgent: uses MCP scanner adapter if scanner server is configured ─
+	var scannerSvc scanner_ports.ScannerServicePort
+	for _, srv := range tomlCfg.MCP.Servers {
+		if srv.Enabled && srv.Name == "scanner" {
+			scannerSvc = mcp_adapter.NewScannerAdapter(mcpClient, "scanner")
+			appLogger.Info(ctx, "Scanner service: MCP backend active")
+			break
+		}
+	}
+	if scannerSvc == nil {
+		appLogger.Info(ctx, "Scanner service: not configured — security scans disabled (add [[mcp.servers]] name='scanner')")
+	}
+
+	masterAgent := agent.NewMasterAgent(scannerSvc, llmRegistry.Default(), appLogger)
+	reportAgent := agent.NewReportAgent(nil, appLogger)
+	duckOpsAgent := agent.NewDuckOpsAgent(masterAgent, reportAgent, appLogger)
+
+	// ── Register tools ───────────────────────────────────────────────────────
+	skillRegistry, err := registerTools(ctx, toolRegistry, deps, tracker, bridge,
+		capabilityRegistry, profile, appLogger, mcpClient)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 
-	// Initialize MasterAgent (scan orchestrator)
-	// Pass the default LLM provider for intelligent scanner selection
-	var masterLLM llm_domain.LLM
-	if llmRegistry != nil {
-		masterLLM = llmRegistry.Default()
-	}
-	masterAgent := agent.NewMasterAgent(scannerSvc, masterLLM, appLogger)
-
-	// Initialize ReportAgent (local formatter + optional cloud push)
-	reportAgent := agent.NewReportAgent(nil, appLogger) // cloud client wired in Phase 4
-
-	// Initialize DuckOpsAgent (conversational CLI)
-	duckOpsAgent := agent.NewDuckOpsAgent(masterAgent, reportAgent, appLogger)
-
 	provider := profile.Provider
 	if provider == "" {
-		providers := llmRegistry.List()
-		if len(providers) > 0 {
+		if providers := llmRegistry.List(); len(providers) > 0 {
 			provider = providers[0]
 		}
 	}
 
 	appLogger.Info(ctx, "🦆 DuckOps Agent initialized successfully")
 	return &App{
-		Kernel:        k,
-		Sessions:      tracker,
-		AppSessions:   appSessionManager,
-		MasterAgent:   masterAgent,
-		DuckOpsAgent:  duckOpsAgent,
-		Provider:      provider,
-		Model:         profile.Model,
-		Logger:        appLogger,
-		EventBus:      eventBus,
-		SkillRegistry: skillRegistry,
+		Kernel:          k,
+		Sessions:        tracker,
+		AppSessions:     appSessionManager,
+		MasterAgent:     masterAgent,
+		DuckOpsAgent:    duckOpsAgent,
+		MCPClient:       mcpClient,
+		CheckpointStore: cpStore,
+		Provider:        provider,
+		Model:           profile.Model,
+		Logger:          appLogger,
+		EventBus:        eventBus,
+		SkillRegistry:   skillRegistry,
 		Shutdown: func() {
-			appLogger.Info(context.Background(), "🛑 Stopping DuckOps Agent & Cleaning up Managed Resources...")
-			if scannerSvc != nil {
-				_ = scannerSvc.CleanupAllManagedContainers(context.Background())
-			}
+			appLogger.Info(context.Background(), "🛑 Stopping DuckOps Agent...")
+			_ = mcpClient.Close()
 			cancel()
 		},
 	}, nil
 }
 
-// buildLLMRegistry bridges TOML providers → shared LLM registry.
 func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) (llm_domain.LLMRegistry, error) {
 	sharedCfg := llm_domain.Config{
 		Default:   profile.Provider,
@@ -349,48 +276,42 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) (ll
 	}
 	for name, prov := range profile.Providers {
 		sharedCfg.Providers[name] = llm_domain.ProviderConfig{
-			APIKey:  prov.APIKey,
-			Model:   prov.Model,
-			BaseURL: prov.BaseURL,
+			APIKey: prov.APIKey, Model: prov.Model, BaseURL: prov.BaseURL,
 		}
 	}
-
-	llmRegistry, err := application.NewLLMRegistry(sharedCfg)
+	llmRegistry, err := llm_application.NewLLMRegistry(sharedCfg)
 	if err != nil {
-		appLogger.ErrorErr(context.Background(), err, "Failed to initialize LLM Registry")
 		return nil, fmt.Errorf("failed to initialize LLM registry: %w", err)
 	}
-
-	// Gemini special handling (uses native SDK, not OpenAI-compatible)
 	for name, prov := range profile.Providers {
 		if (name == "gemini" || prov.Type == "gemini") && prov.APIKey != "" {
-			geminiAdapter, err := infrastructure.NewGeminiAdapter(
-				context.Background(), prov.APIKey, prov.Model,
-			)
+			geminiAdapter, err := infrastructure.NewGeminiAdapter(context.Background(), prov.APIKey, prov.Model)
 			if err != nil {
-				appLogger.ErrorErr(context.Background(), err, "Warning: Gemini init failed for "+name)
+				appLogger.ErrorErr(context.Background(), err, "Gemini init failed for "+name)
 			} else {
 				llmRegistry.Register(geminiAdapter)
 			}
 		}
 	}
-
 	return llmRegistry, nil
 }
 
-// registerTools registers all agent tools with the kernel.
-func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps kernel.Dependencies, tracker *sa.Tracker, bridge *sa.KernelBridge, registry *sa.CapabilityRegistry, profile config.Profile, appLogger shared_ports.Logger, scannerSvc *aggregator.ScannerService) (domain_skills.Registry, error) {
-	// Setup Hexagonal Task Engine Middleware Pipeline
-	osTranslator := translator.NewOSTranslatorAdapter("") // default to current OS
-	
-	// Create AI Reviewer for the Thinking phase
+func registerTools(
+	ctx context.Context,
+	toolRegistry ports.ToolRegistry,
+	deps kernel.Dependencies,
+	tracker *sa.Tracker,
+	bridge *sa.KernelBridge,
+	registry *sa.CapabilityRegistry,
+	profile config.Profile,
+	appLogger shared_ports.Logger,
+	mcpClient ports.MCPClientPort,
+) (domain_skills.Registry, error) {
+
+	osTranslator := translator.NewOSTranslatorAdapter("")
 	aiReviewer := security.NewAIReviewer(deps.LLM, profile.Provider, appLogger)
-	
 	taskWarden := security.NewTaskWardenAdapter(deps.Warden, osTranslator, appLogger)
-
 	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, deps.ShellExecution, aiReviewer, appLogger)
-
-	// Security Gates
 	fsGate := filesystem.NewWardenGate(deps.Warden, appLogger)
 
 	tools := []struct {
@@ -398,7 +319,6 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 		err  error
 	}{
 		{"chat", toolRegistry.RegisterTool(ctx, chat.NewChatTool(deps.LLM, bridge, bridge))},
-		{"scan", toolRegistry.RegisterTool(ctx, scan.NewScanTool(scannerSvc))},
 		{"subagent", toolRegistry.RegisterTool(ctx, subagent.NewSubagentTool(tracker))},
 		{"resume", toolRegistry.RegisterTool(ctx, subagent.NewResumeTool(tracker))},
 		{"delegate", toolRegistry.RegisterTool(ctx, delegate.NewDelegateTool(tracker, registry))},
@@ -407,7 +327,13 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 		{"todo", toolRegistry.RegisterTool(ctx, todo.NewTodoTool())},
 		{"file_edit", toolRegistry.RegisterTool(ctx, file_ops.NewFileOpsTool(fsGate))},
 		{"generate_report", toolRegistry.RegisterTool(ctx, reporting.NewReportingTool(deps.LLM))},
+		// MCP tools — let the LLM call any connected MCP server
+		{"mcp_call", toolRegistry.RegisterTool(ctx, mcp_tool.NewMCPTool(mcpClient))},
+		{"mcp_list", toolRegistry.RegisterTool(ctx, mcp_tool.NewMCPListTool(mcpClient))},
+		{"grep_search", toolRegistry.RegisterTool(ctx, search.NewGrepSearchTool())},
+		{"web_search", toolRegistry.RegisterTool(ctx, web_search.NewWebSearchTool())},
 	}
+
 	skillRegistry, err := domain_skills.NewEmbeddedRegistry()
 	if err != nil {
 		appLogger.ErrorErr(ctx, err, "Failed to initialize embedded skill registry")
@@ -420,10 +346,8 @@ func registerTools(ctx context.Context, toolRegistry ports.ToolRegistry, deps ke
 
 	for _, t := range tools {
 		if t.err != nil {
-			appLogger.ErrorErr(context.Background(), t.err, "Tool registration failed", shared_ports.Field{Key: "tool", Value: t.name})
 			return nil, fmt.Errorf("tool registration failed for %s: %w", t.name, t.err)
 		}
 	}
-
 	return skillRegistry, nil
 }

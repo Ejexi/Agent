@@ -14,7 +14,6 @@ import (
 type Dependencies struct {
 	ToolRegistry   ports.ToolRegistry
 	MessageBus     ports.BusPort
-	Memory         ports.MemoryPort
 	LLM            shared_domain.LLMRegistry
 	Logger         shared_ports.Logger
 	AuditLog       ports.AuditLogPort

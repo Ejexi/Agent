@@ -104,68 +104,28 @@ func (a *DuckOpsAgent) HandleNaturalLanguage(ctx context.Context, input string) 
 	}
 }
 
-// getStatus returns Docker health + cached image summary.
+// getStatus returns scanner service health.
 func (a *DuckOpsAgent) getStatus(ctx context.Context) string {
 	if a.master == nil || a.master.scannerSvc == nil {
-		return "Docker is not available. Start Docker and run duckops again."
+		return "Scanner service not configured. Add [[mcp.servers]] with name='scanner' to ~/.duckops/config.toml."
 	}
-	return "Docker is running. Scanner service ready.\n" +
-		"Tip: run \"download scanner images\" to pre-warm all scanner images."
+	available := a.master.scannerSvc.AvailableScanners()
+	return fmt.Sprintf("Scanner service ready via MCP. Available scanners: %v", available)
 }
 
-// prefetchImages triggers WarmupImages in the background and reports progress.
+// prefetchImages is kept for CLI compatibility but is a no-op with MCP backend.
+// MCP scanner servers manage their own tool availability.
 func (a *DuckOpsAgent) prefetchImages(ctx context.Context) string {
 	if a.master == nil || a.master.scannerSvc == nil {
-		return "Docker is not available — cannot prefetch images."
+		return "Scanner service not configured — nothing to prefetch."
 	}
-
-	// Collect all scanner names from the subagentScanners map
-	var all []string
-	seen := make(map[string]bool)
-	for _, scanners := range subagentScanners {
-		for _, s := range scanners {
-			if !seen[s] {
-				all = append(all, s)
-				seen[s] = true
-			}
-		}
-	}
-
-	fmt.Printf("Downloading %d scanner images in the background...\n", len(all))
-	go func() {
-		// DockerWarden.WarmupImages handles this via ScannerPort
-		// We reach it through the aggregator's underlying warden
-		if wp, ok := interface{}(a.master.scannerSvc).(interface {
-			WarmupImages(ctx context.Context, names []string) error
-		}); ok {
-			_ = wp.WarmupImages(ctx, all)
-		}
-	}()
-
-	return fmt.Sprintf("Pulling %d images in the background. Run 'is docker ready?' to check status.", len(all))
+	available := a.master.scannerSvc.AvailableScanners()
+	return fmt.Sprintf("MCP scanner backend active. %d scanners available: %v", len(available), available)
 }
 
-// WarmupAll pulls all scanner images in the background at agent startup.
-// Called once from root.go — non-blocking.
+// WarmupAll is a no-op with the MCP backend — servers manage their own readiness.
 func (a *DuckOpsAgent) WarmupAll(ctx context.Context) {
-	if a.master == nil || a.master.scannerSvc == nil {
-		return
-	}
-	var all []string
-	seen := make(map[string]bool)
-	for _, scanners := range subagentScanners {
-		for _, s := range scanners {
-			if !seen[s] {
-				all = append(all, s)
-				seen[s] = true
-			}
-		}
-	}
-	if wp, ok := interface{}(a.master.scannerSvc).(interface {
-		WarmupImages(ctx context.Context, names []string) error
-	}); ok {
-		_ = wp.WarmupImages(ctx, all)
-	}
+	// MCP servers warm up on connection, not on demand.
 }
 
 // intentToScanRequest converts a parsed Intent to a structured ScanRequest.

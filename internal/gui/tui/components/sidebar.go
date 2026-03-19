@@ -21,42 +21,49 @@ var (
 	sidePanelMuted   = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 	sidePanelDir     = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#64B5F6"}
 	sidePanelFile    = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#81C784"}
-	sidePanelSection = lipgloss.AdaptiveColor{Light: "#555555", Dark: "#AAAAAA"}
 )
+
+// Pre-built styles that are purely cosmetic (no dynamic width/height).
+// Building these once avoids repeated allocations in hot render paths.
+var (
+	spTitleStyle = lipgloss.NewStyle().Foreground(sidePanelTitle).Bold(true)
+	spSepStyle   = lipgloss.NewStyle().Foreground(sidePanelBorder)
+	spDirStyle   = lipgloss.NewStyle().Foreground(sidePanelDir)
+	spFileStyle  = lipgloss.NewStyle().Foreground(sidePanelFile)
+	spMutedStyle = lipgloss.NewStyle().Foreground(sidePanelMuted)
+	spLabelStyle = lipgloss.NewStyle().Foreground(sidePanelMuted)
+	spValueStyle = lipgloss.NewStyle().Foreground(sidePanelText)
+	spRootStyle  = lipgloss.NewStyle().Foreground(sidePanelDir).Bold(true)
+)
+
+// skipDirs is the set of directory/file names to ignore during tree traversal.
+// Defined once at package level so collectTree doesn't allocate a new map on
+// every call (including recursive ones).
+var skipDirs = map[string]bool{
+	".git": true, "node_modules": true, "vendor": true,
+	".duckops": true, "__pycache__": true, ".idea": true,
+	"dist": true, "build": true, ".cache": true,
+}
 
 // RenderSidePanel renders the side panel with agent info + file tree.
 func RenderSidePanel(height int, modelName string, promptTokens, completionTokens int) string {
 	innerW := SidePanelWidth - 3
+	sep := spSepStyle.Width(innerW).Render(strings.Repeat("─", innerW))
+	titleW := spTitleStyle.Width(innerW)
 
-	formatTokens := func(n int) string {
-		if n == 0 {
-			return "-"
-		}
-		if n >= 1000 {
-			return fmt.Sprintf("%.1fk", float64(n)/1000.0)
-		}
-		return fmt.Sprintf("%d", n)
-	}
-
-	titleStyle := lipgloss.NewStyle().Foreground(sidePanelTitle).Bold(true).Width(innerW)
-	sepStyle := lipgloss.NewStyle().Foreground(sidePanelBorder).Width(innerW)
-	sep := sepStyle.Render(strings.Repeat("─", innerW))
-
-	// ── Agent Info ─────────────────────────────────────────────────
 	agentSection := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("󰦆  Agent"),
+		titleW.Render("󰦆  Agent"),
 		sep,
 		renderSideItem("Model", truncate(modelName, innerW-8), innerW),
 		renderSideItem("Mode", "TUI", innerW),
 		"",
-		titleStyle.Render("  Tokens"),
+		titleW.Render("  Tokens"),
 		sep,
 		renderSideItem("In", formatTokens(promptTokens), innerW),
 		renderSideItem("Out", formatTokens(completionTokens), innerW),
 		renderSideItem("Total", formatTokens(promptTokens+completionTokens), innerW),
 	)
 
-	// ── File Tree ──────────────────────────────────────────────────
 	fileTreeSection := renderFileTree(innerW, height-lipgloss.Height(agentSection)-5)
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
@@ -78,96 +85,86 @@ func RenderSidePanel(height int, modelName string, promptTokens, completionToken
 		Render(content)
 }
 
+func formatTokens(n int) string {
+	switch {
+	case n == 0:
+		return "-"
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
 // renderFileTree builds a compact file tree from cwd.
 func renderFileTree(width, maxLines int) string {
 	if maxLines < 3 {
 		return ""
 	}
 
-	titleStyle := lipgloss.NewStyle().Foreground(sidePanelTitle).Bold(true).Width(width)
-	sepStyle := lipgloss.NewStyle().Foreground(sidePanelBorder).Width(width)
-	sep := sepStyle.Render(strings.Repeat("─", width))
+	sep := spSepStyle.Width(width).Render(strings.Repeat("─", width))
 
 	cwd, _ := os.Getwd()
 	dirName := filepath.Base(cwd)
 
-	// Collect tree entries (max 2 levels deep)
-	entries := collectTree(cwd, "", 0, 2)
-
-	// Limit lines
-	available := maxLines - 3 // title + sep + root
+	available := maxLines - 3 // title + sep + root line
 	if available < 1 {
 		available = 1
 	}
-	if len(entries) > available {
-		entries = entries[:available]
-	}
 
-	// Root line
-	rootStyle := lipgloss.NewStyle().Foreground(sidePanelDir).Bold(true)
-	lines := []string{
-		titleStyle.Render("  Files"),
+	entries := collectTree(cwd, "", 0, 2, &available)
+
+	lines := make([]string, 0, 3+len(entries))
+	lines = append(lines,
+		spTitleStyle.Width(width).Render("  Files"),
 		sep,
-		rootStyle.Render("📁 " + truncate(dirName, width-3)),
-	}
-
-	for _, e := range entries {
-		lines = append(lines, e)
-	}
+		spRootStyle.Render("📁 "+truncate(dirName, width-3)),
+	)
+	lines = append(lines, entries...)
 
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-type treeEntry struct {
-	display string
-	isDir   bool
-}
-
-func collectTree(dir, prefix string, depth, maxDepth int) []string {
-	if depth >= maxDepth {
+// collectTree recursively walks dir up to maxDepth levels, appending rendered
+// lines and decrementing *budget so callers don't need a separate trim step.
+func collectTree(dir, prefix string, depth, maxDepth int, budget *int) []string {
+	if depth >= maxDepth || *budget <= 0 {
 		return nil
 	}
 
-	entries, err := os.ReadDir(dir)
+	rawEntries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 
-	// Sort: dirs first, then files, alphabetically
-	sort.Slice(entries, func(i, j int) bool {
-		iDir := entries[i].IsDir()
-		jDir := entries[j].IsDir()
+	// Filter skipped entries first so isLast is computed on the visible set.
+	filtered := rawEntries[:0]
+	for _, e := range rawEntries {
+		if !skipDirs[e.Name()] {
+			filtered = append(filtered, e)
+		}
+	}
+
+	// Sort: dirs first, then alphabetical.
+	sort.Slice(filtered, func(i, j int) bool {
+		iDir := filtered[i].IsDir()
+		jDir := filtered[j].IsDir()
 		if iDir != jDir {
 			return iDir
 		}
-		return entries[i].Name() < entries[j].Name()
+		return filtered[i].Name() < filtered[j].Name()
 	})
 
-	// Skip noise
-	skip := map[string]bool{
-		".git": true, "node_modules": true, "vendor": true,
-		".duckops": true, "__pycache__": true, ".idea": true,
-		"dist": true, "build": true, ".cache": true,
-	}
-
-	dirStyle := lipgloss.NewStyle().Foreground(sidePanelDir)
-	fileStyle := lipgloss.NewStyle().Foreground(sidePanelFile)
-	mutedStyle := lipgloss.NewStyle().Foreground(sidePanelMuted)
-
+	const maxShow = 20
 	var lines []string
-	shown := 0
-	maxShow := 20
 
-	for i, e := range entries {
-		if shown >= maxShow {
-			lines = append(lines, mutedStyle.Render(prefix+"  └── ..."))
+	for idx, e := range filtered {
+		if *budget <= 0 || idx >= maxShow {
+			lines = append(lines, spMutedStyle.Render(prefix+"  └── ..."))
 			break
 		}
-		if skip[e.Name()] {
-			continue
-		}
 
-		isLast := i == len(entries)-1
+		isLast := idx == len(filtered)-1
 		connector := "├── "
 		childPrefix := prefix + "│   "
 		if isLast {
@@ -178,33 +175,37 @@ func collectTree(dir, prefix string, depth, maxDepth int) []string {
 		innerW := SidePanelWidth - 5
 		name := truncate(e.Name(), innerW-len(prefix)-4)
 
-		var line string
 		if e.IsDir() {
-			line = mutedStyle.Render(prefix+connector) + dirStyle.Render("📁 "+name)
+			line := spMutedStyle.Render(prefix+connector) + spDirStyle.Render("📁 "+name)
 			lines = append(lines, line)
-			shown++
-			// Recurse one level
-			if depth+1 < maxDepth {
-				children := collectTree(filepath.Join(dir, e.Name()), childPrefix, depth+1, maxDepth)
-				lines = append(lines, children...)
-				shown += len(children)
-			}
+			*budget--
+
+			children := collectTree(filepath.Join(dir, e.Name()), childPrefix, depth+1, maxDepth, budget)
+			lines = append(lines, children...)
 		} else {
 			icon := fileIcon(e, dir)
-			line = mutedStyle.Render(prefix+connector) + fileStyle.Render(icon+" "+name)
+			line := spMutedStyle.Render(prefix+connector) + spFileStyle.Render(icon+" "+name)
 			lines = append(lines, line)
-			shown++
+			*budget--
 		}
 	}
 
 	return lines
 }
 
-// fileIcon returns a simple icon based on file extension.
-func fileIcon(e fs.DirEntry, dir string) string {
+// fileIcon returns a simple icon based on file extension or name.
+func fileIcon(e fs.DirEntry, _ string) string {
 	name := e.Name()
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
+
+	// Check well-known names before falling back to extension.
+	switch strings.ToLower(name) {
+	case "dockerfile":
+		return "🐳"
+	case "makefile", "gnumakefile":
+		return "🔧"
+	}
+
+	switch strings.ToLower(filepath.Ext(name)) {
 	case ".go":
 		return "🐹"
 	case ".py":
@@ -223,21 +224,14 @@ func fileIcon(e fs.DirEntry, dir string) string {
 		return "🗄️"
 	case ".tf", ".tfvars":
 		return "🏗️"
-	case ".dockerfile", "":
-		if strings.EqualFold(name, "Dockerfile") {
-			return "🐳"
-		}
-		return "📄"
 	default:
 		return "📄"
 	}
 }
 
 func renderSideItem(label, value string, width int) string {
-	labelStyle := lipgloss.NewStyle().Foreground(sidePanelMuted)
-	valueStyle := lipgloss.NewStyle().Foreground(sidePanelText)
 	return lipgloss.NewStyle().Width(width).Render(
-		labelStyle.Render(label+": ") + valueStyle.Render(value),
+		spLabelStyle.Render(label+": ") + spValueStyle.Render(value),
 	)
 }
 

@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 
 	llm_domain "github.com/SecDuckOps/shared/llm/domain"
 	shared_ports "github.com/SecDuckOps/shared/ports"
-	"github.com/SecDuckOps/shared/scanner/aggregator"
 	"github.com/SecDuckOps/shared/scanner/domain"
+	scanner_ports "github.com/SecDuckOps/shared/scanner/ports"
 	"github.com/SecDuckOps/shared/types"
 	"github.com/SecDuckOps/agent/internal/agent/subagents"
 )
@@ -20,31 +19,18 @@ const defaultScanTimeout = 30 * time.Minute
 
 // MasterAgent orchestrates parallel scan subagents via the AOrchestra pattern.
 //
-// Execution flow (3 phases):
-//
-//  Phase 1 — Understand:
-//    AnalyzeProject() → ProjectSignals (fast filesystem walk, no LLM)
-//
-//  Phase 2 — Plan:
-//    Orchestrator.Plan() → OrchestratorPlan (LLM produces structured JSON plan)
-//    ExtractSubagentContexts() → []SubagentContext (4-tuple per subagent)
-//
-//  Phase 3 — Execute:
-//    For each SubagentContext → goroutine → subagent.Run() with full context
-//    WaitForAll → aggregateResults
-//
-// Layer rule: MasterAgent does NOT know about Docker, the Kernel, or HTTP.
+// Transport is fully abstracted behind ScannerServicePort — previously Docker,
+// now MCP. The orchestration logic (AOrchestra 3-phase) is unchanged.
 type MasterAgent struct {
-	scannerSvc   *aggregator.ScannerService
+	scannerSvc   scanner_ports.ScannerServicePort
 	llm          llm_domain.LLM
 	orchestrator *Orchestrator
 	logger       shared_ports.Logger
 }
 
 // NewMasterAgent creates a MasterAgent.
-// scannerSvc nil → scans fail gracefully.
-// llm nil → falls back to static plan + runs all default scanners.
-func NewMasterAgent(scannerSvc *aggregator.ScannerService, llm llm_domain.LLM, logger shared_ports.Logger) *MasterAgent {
+// scannerSvc nil → scans fail gracefully with a clear error.
+func NewMasterAgent(scannerSvc scanner_ports.ScannerServicePort, llm llm_domain.LLM, logger shared_ports.Logger) *MasterAgent {
 	return &MasterAgent{
 		scannerSvc:   scannerSvc,
 		llm:          llm,
@@ -53,8 +39,8 @@ func NewMasterAgent(scannerSvc *aggregator.ScannerService, llm llm_domain.LLM, l
 	}
 }
 
-// ScannerSvc exposes the scanner service for bootstrap health checks.
-func (m *MasterAgent) ScannerSvc() *aggregator.ScannerService {
+// ScannerSvc exposes the scanner service for health checks.
+func (m *MasterAgent) ScannerSvc() scanner_ports.ScannerServicePort {
 	return m.scannerSvc
 }
 
@@ -133,38 +119,34 @@ func (m *MasterAgent) runSubagent(
 		return
 	}
 
-	// Determine scanners to run based on depth
+	// Determine scanners based on depth, then filter to only available ones
 	scanners := selectByDepth(allowed, sc.Depth)
-
-	var mu sync.Mutex
-	var allFindings []domain.Finding
-	var wg sync.WaitGroup
-
-	for _, name := range scanners {
-		wg.Add(1)
-		go func(scannerName string) {
-			defer wg.Done()
-
-			// Build per-scanner context carrying the orchestrator's instruction
-			scanCtx := ctx
-			result, err := m.scannerSvc.RunScan(scanCtx, req.TargetPath, scannerName)
-			if err != nil {
-				m.logf("scanner %s failed (non-fatal): %v", scannerName, err)
-				return
+	if m.scannerSvc != nil {
+		var available []string
+		for _, s := range scanners {
+			if m.scannerSvc.HasScanner(s) {
+				available = append(available, s)
 			}
-
-			findings := filterBySeverity(result.Findings, req.MinSeverity)
-			m.logf("scanner %s: %d findings", scannerName, len(findings))
-
-			mu.Lock()
-			allFindings = append(allFindings, findings...)
-			mu.Unlock()
-		}(name)
+		}
+		if len(available) > 0 {
+			scanners = available
+		}
 	}
 
-	wg.Wait()
+	// Run all scanners in parallel via RunScanBatch
+	batchResults := m.scannerSvc.RunScanBatch(ctx, req.TargetPath, scanners)
 
-	// Store the orchestrator instruction alongside task for reporting
+	var allFindings []domain.Finding
+	for _, br := range batchResults {
+		if br.Err != nil {
+			m.logf("scanner %s failed (non-fatal): %v", br.ScannerName, br.Err)
+			continue
+		}
+		findings := filterBySeverity(br.Result.Findings, req.MinSeverity)
+		m.logf("scanner %s: %d findings", br.ScannerName, len(findings))
+		allFindings = append(allFindings, findings...)
+	}
+
 	task.OrchestratorInstruction = sc.Instruction
 	task.OrchestratorContext = sc.Context
 

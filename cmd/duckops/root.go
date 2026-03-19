@@ -84,6 +84,9 @@ var rootCmd = &cobra.Command{
 			addr = ":8090"
 		}
 		srv := server.NewAgentServer(app.Sessions, addr, app.Logger)
+		if app.CheckpointStore != nil {
+			srv.WithCheckpointStore(app.CheckpointStore)
+		}
 		go func() {
 			app.Logger.Info(context.Background(), fmt.Sprintf("Server listening on %s", addr))
 			if err := srv.Start(); err != nil {

@@ -46,6 +46,9 @@ var serveCmd = &cobra.Command{
 		fmt.Printf("🦆 DuckOps Agent Server starting on %s\n", addr)
 
 		srv := server.NewAgentServer(app.Sessions, addr, app.Logger)
+		if app.CheckpointStore != nil {
+			srv.WithCheckpointStore(app.CheckpointStore)
+		}
 
 		// Graceful shutdown
 		sigChan := make(chan os.Signal, 1)

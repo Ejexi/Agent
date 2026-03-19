@@ -7,14 +7,21 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SecDuckOps/agent/internal/adapters/checkpoint"
+	duckops_context "github.com/SecDuckOps/agent/internal/context"
 	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/skills"
+	"github.com/SecDuckOps/shared/events"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 	"github.com/SecDuckOps/shared/types"
 )
+
+// checkpointEvery controls how often (in turns) the session is saved to disk.
+// A value of 5 means after every 5th LLM call the messages are flushed.
+const checkpointEvery = 5
 
 // LLMProvider is the interface for LLM access.
 type LLMProvider interface {
@@ -36,10 +43,13 @@ type agentToolCall struct {
 
 // SessionActor runs the LLM agent loop for a single subagent session.
 type SessionActor struct {
-	executor       ports.ToolExecutor
-	schemaProvider ports.ToolSchemaProvider
-	secretScanner  ports.SecretScannerPort
-	session        *SubagentSession
+	executor        ports.ToolExecutor
+	schemaProvider  ports.ToolSchemaProvider
+	secretScanner   ports.SecretScannerPort
+	session         *SubagentSession
+	hooks           []ports.AgentHook
+	// checkpointStore is optional — when set, messages are saved every checkpointEvery turns.
+	checkpointStore *checkpoint.Store
 }
 
 func NewSessionActor(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProvider, secretScanner ports.SecretScannerPort, session *SubagentSession) *SessionActor {
@@ -48,6 +58,40 @@ func NewSessionActor(executor ports.ToolExecutor, schemaProvider ports.ToolSchem
 		schemaProvider: schemaProvider,
 		secretScanner:  secretScanner,
 		session:        session,
+	}
+}
+
+// NewSessionActorWithHooks creates a SessionActor with lifecycle hooks attached.
+func NewSessionActorWithHooks(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProvider, secretScanner ports.SecretScannerPort, session *SubagentSession, hooks ...ports.AgentHook) *SessionActor {
+	return &SessionActor{
+		executor:       executor,
+		schemaProvider: schemaProvider,
+		secretScanner:  secretScanner,
+		session:        session,
+		hooks:          hooks,
+	}
+}
+
+// WithCheckpoint attaches a checkpoint store so the session is periodically saved to disk.
+// Call this after NewSessionActor / NewSessionActorWithHooks.
+func (a *SessionActor) WithCheckpoint(store *checkpoint.Store) *SessionActor {
+	a.checkpointStore = store
+	return a
+}
+
+// callHooks runs a hook function across all registered hooks.
+// Errors are emitted as EventLog warnings — they never abort the agent loop.
+func (a *SessionActor) callHooks(fn func(ports.AgentHook) error) {
+	for _, h := range a.hooks {
+		if h == nil {
+			continue
+		}
+		if err := fn(h); err != nil {
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventLog,
+				Message: fmt.Sprintf("[hook warning] %v", err),
+			})
+		}
 	}
 }
 
@@ -91,10 +135,31 @@ func downgradeModel(model string) string {
 func (a *SessionActor) buildSystemPrompt() string {
 	config := a.session.Subagent.Config
 
-	// Build base prompt
 	var prompt strings.Builder
 	prompt.WriteString(skills.DuckOpsRules)
 	prompt.WriteString("\n")
+
+	// ── Inject LocalContext (OS, shell, git, project) ─────────────────────
+	// Mirrors duckops: local_context injected before every session.
+	cwd := "."
+	if config.Context != "" {
+		// Context may carry CWD override from SubagentContext
+		cwd = config.Context
+	}
+	_ = cwd // used below via agentctx
+
+	agentctx := duckops_context.Collect()
+	prompt.WriteString("\n")
+	prompt.WriteString(agentctx.FormatSystemPrompt())
+	prompt.WriteString("\n")
+
+	// ── Inject AGENTS.md if found in project ──────────────────────────────
+	// Mirrors duckops: agents_md injected when found walking up from cwd.
+	if agentsMD := duckops_context.DiscoverAgentsMD(agentctx.WorkingDirectory); agentsMD != nil {
+		prompt.WriteString("\n")
+		prompt.WriteString(agentsMD.FormatForPrompt())
+		prompt.WriteString("\n")
+	}
 
 	prompt.WriteString(`
 === NATURAL TERMINAL EXECUTION RULES ===
@@ -211,10 +276,28 @@ func (a *SessionActor) Run() error {
 
 	// ===== Build conversation =====
 	systemPrompt := a.buildSystemPrompt()
-	messages := []shared_domain.Message{
-		{Role: shared_domain.RoleSystem, Content: systemPrompt},
-		{Role: shared_domain.RoleAssistant, Content: "Understood. I am DuckOps, an expert DevSecOps agent. I will follow your instructions precisely, avoid fluff, and prioritize action."},
-		{Role: shared_domain.RoleUser, Content: config.Instructions},
+
+	var messages []shared_domain.Message
+	if len(a.session.ResumeMessages) > 0 {
+		// ── Checkpoint resume: restore saved history ──────────────────────────
+		// Replace the system message with the refreshed one (picks up new LocalContext,
+		// updated AGENTS.md, etc.) but keep all tool results and LLM responses intact.
+		messages = make([]shared_domain.Message, len(a.session.ResumeMessages))
+		copy(messages, a.session.ResumeMessages)
+		if len(messages) > 0 && messages[0].Role == shared_domain.RoleSystem {
+			messages[0].Content = systemPrompt // refresh system context
+		}
+		a.session.Emit(sa.SubagentEvent{
+			Type:    sa.EventLog,
+			Message: fmt.Sprintf("Resuming from checkpoint: %d messages restored", len(messages)),
+		})
+	} else {
+		// ── Fresh start ───────────────────────────────────────────────────────
+		messages = []shared_domain.Message{
+			{Role: shared_domain.RoleSystem, Content: systemPrompt},
+			{Role: shared_domain.RoleAssistant, Content: "Understood. I am DuckOps, an expert DevSecOps agent. I will follow your instructions precisely, avoid fluff, and prioritize action."},
+			{Role: shared_domain.RoleUser, Content: config.Instructions},
+		}
 	}
 
 	maxSteps := config.MaxSteps
@@ -232,10 +315,24 @@ func (a *SessionActor) Run() error {
 	})
 	a.logRole(shared_domain.RoleSystem, "Starting background loop (provider: %s, MaxSteps: %d)", provider, maxSteps)
 
+	// ── Typed: RunStarted (mirrors duckops AgentEvent::RunStarted) ──────
+	a.session.Emit(sa.SubagentEvent{
+		Type:    sa.EventStatus,
+		Message: "run_started",
+	})
+
 	// Initialization before loop
 	var lastToolName string
 	var lastToolArgsHash string
 	var identicalCallCount int
+
+	// currentModel starts from config, can be switched mid-run via AgentCommandSwitchModel
+	currentModel := config.Model
+
+	// steeringQueue: injected mid-flight before the next LLM call
+	// followUpQueue: queued after the current turn completes
+	var steeringQueue []string
+	var followUpQueue []string
 
 	for i := 0; i < maxSteps; i++ {
 		select {
@@ -247,6 +344,89 @@ func (a *SessionActor) Run() error {
 		a.session.Emit(sa.SubagentEvent{
 			Type:    sa.EventLog,
 			Message: fmt.Sprintf("Step %d/%d (State: Running)", i+1, maxSteps),
+		})
+
+		// ── Drain CommandChan (non-blocking) at every turn boundary ──────
+		// Mirrors duckops drain_runtime_commands_nonblocking().
+		drainCommands:
+		for {
+			select {
+			case cmd, ok := <-a.session.CommandChan:
+				if !ok {
+					break drainCommands
+				}
+				switch cmd.Type {
+				case sa.AgentCommandSteering:
+					if cmd.Payload != "" {
+						steeringQueue = append(steeringQueue, cmd.Payload)
+						a.session.Emit(sa.SubagentEvent{
+							Type:    sa.EventLog,
+							Message: fmt.Sprintf("Steering message queued: %s", cmd.Payload),
+						})
+					}
+				case sa.AgentCommandFollowUp:
+					if cmd.Payload != "" {
+						followUpQueue = append(followUpQueue, cmd.Payload)
+					}
+				case sa.AgentCommandSwitchModel:
+					if cmd.Payload != "" {
+						currentModel = cmd.Payload
+						a.session.Emit(sa.SubagentEvent{
+							Type:    sa.EventLog,
+							Message: fmt.Sprintf("Model switched to: %s", currentModel),
+						})
+					}
+				case sa.AgentCommandCancel:
+					a.session.Emit(sa.SubagentEvent{
+						Type:    sa.EventRunCompleted,
+						Message: "cancelled",
+						Data: events.RunCompletedData{
+							TotalTurns: i + 1, StopReason: "cancelled", RunID: a.session.Subagent.RunID,
+						},
+					})
+					a.session.Cancel()
+					return nil
+				}
+			default:
+				break drainCommands
+			}
+		}
+
+		// ── Inject steering messages before LLM call ──────────────────────
+		// Steering arrives first — overrides normal flow (mirrors duckops).
+		for _, steering := range steeringQueue {
+			messages = append(messages, shared_domain.Message{
+				Role:    shared_domain.RoleUser,
+				Content: steering,
+			})
+		}
+		steeringQueue = steeringQueue[:0]
+
+		// ── Periodic checkpoint save ──────────────────────────────────────────
+		// Save every checkpointEvery turns so the session can be resumed after crash.
+		if a.checkpointStore != nil && (i+1)%checkpointEvery == 0 {
+			meta := map[string]interface{}{
+				"session_id": a.session.Subagent.SessionID,
+				"turn":       i + 1,
+				"provider":   provider,
+			}
+			if err := a.checkpointStore.Save(ctx, a.session.Subagent.SessionID, messages, meta); err != nil {
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventLog,
+					Message: fmt.Sprintf("[checkpoint] save failed (non-fatal): %v", err),
+				})
+			}
+		}
+
+		// ── Typed: TurnStarted (mirrors duckops AgentEvent::TurnStarted) ──
+		a.session.Emit(sa.SubagentEvent{
+			Type:    sa.EventTurnStarted,
+			Message: fmt.Sprintf("turn %d/%d", i+1, maxSteps),
+			Data: events.TurnStartedData{
+				Turn:    i + 1,
+				MaxTurn: maxSteps,
+				RunID:   a.session.Subagent.RunID,
+			},
 		})
 
 		// ===== Memory Compression Check =====
@@ -284,9 +464,50 @@ func (a *SessionActor) Run() error {
 		}
 
 		// ===== Call LLM =====
-		result, err := llm.Generate(ctx, messages, nil)
+		var genOpts *shared_domain.GenerateOptions
+		if currentModel != "" {
+			genOpts = &shared_domain.GenerateOptions{Model: currentModel}
+		}
+
+		// ── Hook: BeforeInference ─────────────────────────────────────────
+		sid, rid := a.session.Subagent.SessionID, a.session.Subagent.RunID
+		a.callHooks(func(h ports.AgentHook) error {
+			return h.BeforeInference(ctx, sid, rid, i+1)
+		})
+
+		result, err := llm.Generate(ctx, messages, genOpts)
 		if err != nil {
+			// ── Hook: OnError ─────────────────────────────────────────────
+			a.callHooks(func(h ports.AgentHook) error {
+				return h.OnError(ctx, sid, rid, err)
+			})
+			// ── Typed: RunError ───────────────────────────────────────────
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventRunError,
+				Message: err.Error(),
+				Data:    events.RunErrorData{Error: err.Error(), Retryable: true, RunID: rid},
+			})
 			return types.Wrapf(err, types.ErrCodeInternal, "LLM call failed on step %d", i+1)
+		}
+
+		// ── Hook: AfterInference ──────────────────────────────────────────
+		a.callHooks(func(h ports.AgentHook) error {
+			return h.AfterInference(ctx, sid, rid, i+1,
+				result.Usage.PromptTokens, result.Usage.CompletionTokens)
+		})
+
+		// ── Typed: UsageReport ────────────────────────────────────────────
+		if result.Usage.TotalTokens > 0 {
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventUsageReport,
+				Message: fmt.Sprintf("turn %d: %d tokens", i+1, result.Usage.TotalTokens),
+				Data: events.UsageData{
+					Turn:             i + 1,
+					PromptTokens:     result.Usage.PromptTokens,
+					CompletionTokens: result.Usage.CompletionTokens,
+					TotalTokens:      result.Usage.TotalTokens,
+				},
+			})
 		}
 
 		response := result.Content
@@ -314,7 +535,47 @@ func (a *SessionActor) Run() error {
 			a.session.Subagent.Result = parsed.Answer
 			a.session.mu.Unlock()
 			a.session.Emit(sa.SubagentEvent{Type: sa.EventResult, Message: parsed.Answer})
-			
+
+			// ── Typed: TurnCompleted + RunCompleted ──
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventTurnCompleted,
+				Message: "stop",
+				Data: events.TurnCompletedData{
+					Turn: i + 1, FinishReason: "stop", RunID: a.session.Subagent.RunID,
+				},
+			})
+
+			// ── FollowUp: if queued, re-enter the loop instead of exiting ──
+			// Mirrors duckops: follow_up continues the run after current turn.
+			if len(followUpQueue) > 0 {
+				for _, followUp := range followUpQueue {
+					messages = append(messages, shared_domain.Message{
+						Role:    shared_domain.RoleUser,
+						Content: followUp,
+					})
+				}
+				followUpQueue = followUpQueue[:0]
+				continue
+			}
+
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventRunCompleted,
+				Message: "completed",
+				Data: events.RunCompletedData{
+					TotalTurns: i + 1, StopReason: "completed", RunID: a.session.Subagent.RunID,
+				},
+			})
+
+			// ── Final checkpoint on completion ──
+			if a.checkpointStore != nil {
+				meta := map[string]interface{}{
+					"session_id":  a.session.Subagent.SessionID,
+					"completed":   true,
+					"total_turns": i + 1,
+				}
+				_ = a.checkpointStore.Save(ctx, a.session.Subagent.SessionID, messages, meta)
+			}
+
 			a.session.Emit(sa.SubagentEvent{
 				Type:    sa.EventLog,
 				Message: "Lifecycle: Finished → Task execution completed naturally",
@@ -377,10 +638,16 @@ func (a *SessionActor) Run() error {
 					"args": tc.Args,
 				},
 			})
+			// ── Typed: ToolExecutionStarted ──
+			a.session.Emit(sa.SubagentEvent{
+				Type:    sa.EventToolExecutionStarted,
+				Message: fmt.Sprintf("executing %s", tc.Name),
+				Data:    events.ToolEventData{ToolCallID: tcID, ToolName: tc.Name, RunID: a.session.Subagent.RunID},
+			})
 			a.logRole(shared_domain.RoleAssistant, "Calling tool: %s", tc.Name)
 
 			// ===== Pause-on-approval (non-sandbox mode) =====
-			if config.PauseOnApproval {
+			if config.PauseOnApproval && !config.IsAutoApproved(tc.Name) {
 				approved, err := a.waitForApproval(ctx, tcID, tc)
 				if err != nil {
 					return err
@@ -419,6 +686,11 @@ func (a *SessionActor) Run() error {
 				Message: fmt.Sprintf("Executing tool '%s' via sandbox boundary (timeout: configured per tool)", tc.Name),
 			})
 
+			// ── Hook: BeforeToolExecution ─────────────────────────────────
+			a.callHooks(func(h ports.AgentHook) error {
+				return h.BeforeToolExecution(ctx, sid, rid, tcID, tc.Name)
+			})
+
 			result, execErr := a.executor.Execute(ctx, task)
 
 			messages = append(messages, shared_domain.Message{
@@ -434,12 +706,32 @@ func (a *SessionActor) Run() error {
 					Type:    sa.EventError,
 					Message: fmt.Sprintf("Tool '%s' failed: %v", tc.Name, execErr),
 				})
+				// ── Typed: ToolExecutionCompleted (error) ──
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventToolExecutionCompleted,
+					Message: "tool_error",
+					Data:    events.ToolCompletedData{ToolCallID: tcID, ToolName: tc.Name, IsError: true, RunID: a.session.Subagent.RunID},
+				})
+				// ── Hook: AfterToolExecution (error) ──────────────────────
+				a.callHooks(func(h ports.AgentHook) error {
+					return h.AfterToolExecution(ctx, sid, rid, tcID, tc.Name, true)
+				})
 				a.logRole(shared_domain.RoleTool, "Tool error: %v", execErr)
 			} else {
 				resultJSON, _ := json.Marshal(result.Data)
 				messages = append(messages, shared_domain.Message{
 					Role:    shared_domain.RoleUser,
 					Content: fmt.Sprintf("Tool '%s' returned: %s\n\nSYSTEM_NOTE: Evaluate the output. If the task is strictly fulfilled, emit 'final_answer'.", tc.Name, string(resultJSON)),
+				})
+				// ── Typed: ToolExecutionCompleted (success) ──
+				a.session.Emit(sa.SubagentEvent{
+					Type:    sa.EventToolExecutionCompleted,
+					Message: "tool_ok",
+					Data:    events.ToolCompletedData{ToolCallID: tcID, ToolName: tc.Name, IsError: false, RunID: a.session.Subagent.RunID},
+				})
+				// ── Hook: AfterToolExecution (success) ────────────────────
+				a.callHooks(func(h ports.AgentHook) error {
+					return h.AfterToolExecution(ctx, sid, rid, tcID, tc.Name, false)
 				})
 				a.logRole(shared_domain.RoleTool, "Tool output received (length: %d)", len(resultJSON))
 			}
@@ -454,6 +746,16 @@ func (a *SessionActor) Run() error {
 		return nil
 	}
 
+	// ── Typed: RunError — max steps exceeded ──
+	a.session.Emit(sa.SubagentEvent{
+		Type:    sa.EventRunError,
+		Message: fmt.Sprintf("max steps exceeded (%d)", maxSteps),
+		Data: events.RunErrorData{
+			Error:     fmt.Sprintf("agent loop exceeded maximum steps (%d)", maxSteps),
+			Retryable: true,
+			RunID:     a.session.Subagent.RunID,
+		},
+	})
 	return types.Newf(types.ErrCodeInternal, "agent loop exceeded maximum steps (%d)", maxSteps)
 }
 

@@ -150,3 +150,87 @@ Cloud push is non-fatal — if it fails, the local scan result is unaffected.
 - Environment variables
 - Secrets or credentials
 - Absolute file paths
+
+---
+
+## `[[mcp.servers]]` — MCP Server Integration
+
+DuckOps بيـ spawn الـ MCP servers كـ child processes على جهازك مباشرة. مفيش Docker، مفيش network — كل حاجة بتشتغل locally عبر stdin/stdout.
+
+```toml
+# مثال كامل في config.toml
+
+# Scanner MCP server — بيعمل security scans
+[[mcp.servers]]
+name      = "scanner"
+transport = "stdio"
+command   = ["npx", "-y", "@duckops/mcp-scanner"]
+enabled   = true
+
+# GitHub MCP server — بيتعامل مع repos, issues, PRs
+[[mcp.servers]]
+name      = "github"
+transport = "stdio"
+command   = ["npx", "-y", "@modelcontextprotocol/server-github"]
+enabled   = true
+[mcp.servers.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_xxxxxxxxxxxx"
+
+# Filesystem MCP server — read/write files
+[[mcp.servers]]
+name      = "filesystem"
+transport = "stdio"
+command   = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
+enabled   = true
+
+# Restrict which tools the agent can call from this server
+[[mcp.servers]]
+name          = "postgres"
+transport     = "stdio"
+command       = ["npx", "-y", "@modelcontextprotocol/server-postgres"]
+enabled       = true
+allowed_tools = ["query", "list_tables"]   # whitelist — مش كل tools المتاحة
+[mcp.servers.env]
+POSTGRES_CONNECTION_STRING = "postgresql://user:pass@localhost/mydb"
+```
+
+### إزاي بيشتغل
+
+```
+DuckOps process
+    │
+    ├─── spawn ──► npx @duckops/mcp-scanner   (child process)
+    │              stdin/stdout (JSON-RPC 2.0)
+    │
+    ├─── spawn ──► npx @modelcontextprotocol/server-github
+    │              stdin/stdout
+    │
+    └─── spawn ──► npx @modelcontextprotocol/server-filesystem
+                   stdin/stdout
+```
+
+### Scanner MCP Protocol
+
+الـ scanner server المتوقع يـ expose tools بالشكل ده:
+
+| Tool name | الوظيفة |
+|-----------|---------|
+| `scanner__trivy` | Container/filesystem vulnerability scan |
+| `scanner__semgrep` | SAST — code patterns |
+| `scanner__gitleaks` | Secret detection |
+| `scanner__checkov` | IaC misconfigurations |
+| `scanner__gosec` | Go-specific security issues |
+
+Input لكل tool: `{ "target": "/path/to/scan" }`  
+Output: JSON matching `scanner.ScanResult` schema.
+
+### LLM يستخدم MCP tools
+
+```
+> scan this project for vulnerabilities
+
+Agent: calls mcp_list → sees scanner tools
+Agent: calls mcp_call { server: "scanner", tool: "scanner__trivy", arguments: { target: "." } }
+Agent: calls mcp_call { server: "scanner", tool: "scanner__semgrep", arguments: { target: "." } }
+Agent: formats results → returns findings report
+```

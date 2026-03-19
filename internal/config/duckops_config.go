@@ -16,9 +16,27 @@ import (
 type DuckOpsConfig struct {
 	Profiles map[string]Profile `toml:"profiles"`
 	Settings Settings           `toml:"settings"`
+	MCP      MCPConfig          `toml:"mcp"`
 }
 
-// Profile represents a named configuration profile (e.g., "Default", "Super Duck").
+// MCPConfig holds global MCP server configuration.
+// Individual servers are listed under [[mcp.servers]] in config.toml.
+type MCPConfig struct {
+	Servers []MCPServerEntry `toml:"servers"`
+}
+
+// MCPServerEntry maps directly to domain/mcp.ServerConfig.
+type MCPServerEntry struct {
+	Name         string            `toml:"name"`
+	Transport    string            `toml:"transport"` // "stdio" | "sse"
+	Command      []string          `toml:"command"`
+	URL          string            `toml:"url,omitempty"`
+	Env          map[string]string `toml:"env,omitempty"`
+	AllowedTools []string          `toml:"allowed_tools,omitempty"`
+	Enabled      bool              `toml:"enabled"`
+}
+
+// Profile represents a named configuration profile.
 type Profile struct {
 	APIEndpoint  string              `toml:"api_endpoint,omitempty"`
 	Provider     string              `toml:"provider,omitempty"`
@@ -28,6 +46,12 @@ type Profile struct {
 	Warden       *WardenConfig       `toml:"warden,omitempty"`
 	Secrets      *SecretsConfig      `toml:"secrets,omitempty"`
 	Audit        *AuditConfig        `toml:"audit,omitempty"`
+	// AllowedTools restricts which tools the agent may call (empty = all).
+	AllowedTools []string `toml:"allowed_tools,omitempty"`
+	// AutoApproveTools lists tools that are approved automatically without pausing.
+	// Mirrors duckops profile.auto_approve.
+	// Example: ["view", "load_skill", "mcp_list"]
+	AutoApproveTools []string `toml:"auto_approve,omitempty"`
 }
 
 // Provider configures an LLM provider within a profile.

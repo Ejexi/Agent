@@ -6,8 +6,10 @@ import (
 	"sync"
 	"time"
 
+	checkpoint_store "github.com/SecDuckOps/agent/internal/adapters/checkpoint"
 	sa "github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/ports"
+	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 	shared_ports "github.com/SecDuckOps/shared/ports"
 	"github.com/SecDuckOps/shared/types"
 	"github.com/google/uuid"
@@ -15,12 +17,15 @@ import (
 
 // SubagentSession holds the runtime state for a single subagent session.
 type SubagentSession struct {
-	Subagent   sa.Subagent
-	Log        *EventLog              // Durable event log (replaces EventChan)
-	ResumeChan chan sa.ResumeDecision // Channel for receiving resume decisions
-	Ctx        context.Context
-	Cancel     context.CancelFunc
-	mu         sync.RWMutex
+	Subagent    sa.Subagent
+	Log         *EventLog
+	ResumeChan  chan sa.ResumeDecision
+	CommandChan chan sa.AgentCommand
+	// ResumeMessages holds pre-loaded history when resuming from a checkpoint.
+	ResumeMessages []shared_domain.Message
+	Ctx    context.Context
+	Cancel context.CancelFunc
+	mu     sync.RWMutex
 }
 
 // Emit sends an event to the session's EventLog.
@@ -89,7 +94,11 @@ type Tracker struct {
 	schemaProvider    ports.ToolSchemaProvider
 	secretScanner     ports.SecretScannerPort
 	logger            shared_ports.Logger
-	OnSessionComplete func(sessionID string) // Optional hook for session cleanup
+	checkpointStore   *checkpoint_store.Store
+	// AutoApproveTools is the global list from profile.auto_approve.
+	// Applied to every session spawned by this tracker.
+	AutoApproveTools  []string
+	OnSessionComplete func(sessionID string)
 	mu                sync.RWMutex
 }
 
@@ -102,6 +111,12 @@ func NewTracker(executor ports.ToolExecutor, schemaProvider ports.ToolSchemaProv
 		secretScanner:  secretScanner,
 		logger:         logger,
 	}
+}
+
+// WithCheckpointStore attaches a checkpoint store so sessions are saved to disk.
+func (t *Tracker) WithCheckpointStore(store *checkpoint_store.Store) *Tracker {
+	t.checkpointStore = store
+	return t
 }
 
 // SpawnSubagent creates a new session and starts the agent loop in a goroutine.
@@ -128,6 +143,19 @@ func (t *Tracker) spawnWithRetry(parentID string, originalID string, config sa.S
 
 	// Apply defaults (single source of truth — domain/subagent)
 	config.ApplyDefaults()
+
+	// Merge tracker-level auto_approve (from profile) into session config
+	if len(t.AutoApproveTools) > 0 {
+		seen := make(map[string]bool, len(config.AutoApproveTools))
+		for _, v := range config.AutoApproveTools {
+			seen[v] = true
+		}
+		for _, v := range t.AutoApproveTools {
+			if !seen[v] {
+				config.AutoApproveTools = append(config.AutoApproveTools, v)
+			}
+		}
+	}
 
 	// Background context — sessions outlive the spawning request
 	var sessionCtx context.Context
@@ -156,10 +184,32 @@ func (t *Tracker) spawnWithRetry(parentID string, originalID string, config sa.S
 			Depth:      depth,
 			CreatedAt:  now,
 		},
-		Log:        NewEventLog(sessionID),
-		ResumeChan: make(chan sa.ResumeDecision, 1),
-		Ctx:        sessionCtx,
-		Cancel:     cancel,
+		Log:         NewEventLog(sessionID),
+		ResumeChan:  make(chan sa.ResumeDecision, 1),
+		CommandChan: make(chan sa.AgentCommand, 16),
+		Ctx:         sessionCtx,
+		Cancel:      cancel,
+	}
+
+	// ── Checkpoint resume ─────────────────────────────────────────────────────
+	// If CheckpointID is set, load the saved message history so the agent
+	// continues from where it left off rather than starting fresh.
+	// Mirrors duckops CLI --checkpoint flag behaviour.
+	if config.CheckpointID != "" && t.checkpointStore != nil {
+		env, err := t.checkpointStore.Load(context.Background(), config.CheckpointID)
+		if err != nil {
+			if t.logger != nil {
+				t.logger.ErrorErr(context.Background(), err,
+					fmt.Sprintf("checkpoint resume: failed to load checkpoint %s — starting fresh", config.CheckpointID))
+			}
+		} else {
+			session.ResumeMessages = env.Messages
+			if t.logger != nil {
+				t.logger.Info(context.Background(),
+					fmt.Sprintf("checkpoint resume: loaded %d messages from session %s",
+						len(env.Messages), config.CheckpointID))
+			}
+		}
 	}
 
 	t.mu.Lock()
@@ -192,11 +242,26 @@ func (t *Tracker) GetSession(sessionID string) (ports.SessionView, error) {
 func (t *Tracker) ListSessions() []sa.Subagent {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
 	result := make([]sa.Subagent, 0, len(t.sessions))
 	for _, s := range t.sessions {
 		s.mu.RLock()
 		result = append(result, s.Subagent)
+		s.mu.RUnlock()
+	}
+	return result
+}
+
+// ListSessionsByParent returns all sessions whose ParentID matches parentID.
+// Gap 1 (duckops parity): enables master agent to enumerate its own subagent sessions.
+func (t *Tracker) ListSessionsByParent(parentID string) []sa.Subagent {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var result []sa.Subagent
+	for _, s := range t.sessions {
+		s.mu.RLock()
+		if s.Subagent.ParentID == parentID {
+			result = append(result, s.Subagent)
+		}
 		s.mu.RUnlock()
 	}
 	return result
@@ -221,6 +286,31 @@ func (t *Tracker) CancelSession(sessionID string) error {
 	}
 
 	return nil
+}
+
+// SendCommand sends a runtime AgentCommand to a running session.
+// Commands are non-blocking — they are queued and drained at the next turn boundary.
+//
+// Supported commands:
+//   - AgentCommandSteering:    inject a user message at the next turn (course-correct mid-flight)
+//   - AgentCommandFollowUp:    queue a follow-up after the current turn completes
+//   - AgentCommandSwitchModel: change the LLM model for subsequent turns
+//   - AgentCommandCancel:      request clean shutdown of the agent loop
+func (t *Tracker) SendCommand(sessionID string, cmd sa.AgentCommand) error {
+	t.mu.RLock()
+	session, exists := t.sessions[sessionID]
+	t.mu.RUnlock()
+
+	if !exists {
+		return types.Newf(types.ErrCodeNotFound, "session not found: %s", sessionID)
+	}
+
+	select {
+	case session.CommandChan <- cmd:
+		return nil
+	default:
+		return types.Newf(types.ErrCodeInternal, "command channel full for session %s", sessionID)
+	}
 }
 
 // ResumeSession sends a resume decision to a paused session.
@@ -312,6 +402,9 @@ func (t *Tracker) runSessionLoop(session *SubagentSession) {
 	session.SetStatus(sa.StatusRunning)
 
 	actor := NewSessionActor(t.executor, t.schemaProvider, t.secretScanner, session)
+	if t.checkpointStore != nil {
+		actor.WithCheckpoint(t.checkpointStore)
+	}
 	err := actor.Run()
 
 	if err != nil {

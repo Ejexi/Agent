@@ -124,7 +124,38 @@ func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, erro
 		if resp, ok := result.Data["response"].(string); ok {
 			res.Content = resp
 		} else {
-			res.Content = fmt.Sprintf("Success: %v", result.Data)
+			var sb strings.Builder
+			
+			if stdout, ok := result.Data["stdout"].(string); ok && stdout != "" {
+				sb.WriteString(stdout)
+			} else if rawStdout, ok := result.Data["raw_stdout"].(string); ok && rawStdout != "" {
+				sb.WriteString(rawStdout)
+			}
+			
+			if stderr, ok := result.Data["stderr"].(string); ok && stderr != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(fmt.Sprintf("Error Output:\n%s", stderr))
+			} else if rawStderr, ok := result.Data["raw_stderr"].(string); ok && rawStderr != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(fmt.Sprintf("Error Output:\n%s", rawStderr))
+			}
+
+			if result.Error != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(fmt.Sprintf("Error:\n%s", result.Error))
+			}
+
+			if sb.Len() == 0 {
+				res.Content = fmt.Sprintf("Success: %v", result.Data)
+			} else {
+				res.Content = sb.String()
+			}
 		}
 		
 		eventCh <- res

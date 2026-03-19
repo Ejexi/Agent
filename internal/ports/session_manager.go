@@ -11,8 +11,14 @@ type SessionManager interface {
 	SpawnSubagent(parentID string, config subagent.SessionConfig) (string, error)
 	GetSession(sessionID string) (SessionView, error)
 	ListSessions() []subagent.Subagent
+	// ListSessionsByParent returns all sessions whose ParentID matches parentID.
+	// Gap 1 (duckops parity): enables master agent to enumerate its own subagents.
+	ListSessionsByParent(parentID string) []subagent.Subagent
 	CancelSession(sessionID string) error
 	ResumeSession(sessionID string, decision subagent.ResumeDecision) error
+	// SendCommand delivers a runtime AgentCommand to a running session.
+	// Used for Steering, FollowUp, SwitchModel, and Cancel mid-run.
+	SendCommand(sessionID string, cmd subagent.AgentCommand) error
 
 	// Streaming
 	StreamEvents(sessionID string) (subID uint64, events <-chan IndexedEvent, err error)
