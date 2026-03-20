@@ -2,7 +2,7 @@ package kernel
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
 	"github.com/SecDuckOps/agent/internal/domain"
@@ -73,6 +73,81 @@ func (r *Runtime) Execute(ctx *ExecutionContext, task domain.Task) (domain.Resul
 		}, err
 	}
 
+	// ── HITL: Human-In-The-Loop Approval ──
+	// Require explicit user approval for any task that modifies state or runs commands.
+	needsApproval := false
+	
+	// Only ask for approval if there is an interactive UI listening for events.
+	// Trigger approval for *any* action-oriented capability (everything except reading files).
+	if ctx.OnEvent != nil {
+		for _, cap := range task.RequiredCaps {
+			if cap != security.CapReadFS {
+				needsApproval = true
+				break
+			}
+		}
+	}
+
+	if needsApproval {
+		var question string
+		header := "Security Gate"
+
+		if task.Tool == "shell" || task.Tool == "terminal" {
+			header = "Terminal Exec"
+			cmd, _ := task.Args["command"].(string)
+			argsStr := ""
+			if args, ok := task.Args["args"]; ok {
+				argsStr = fmt.Sprintf("%v", args)
+			}
+			question = fmt.Sprintf("Allow agent to execute:\n  %s %s", cmd, argsStr)
+			if cwd, ok := task.Args["cwd"].(string); ok && cwd != "" && cwd != "." {
+				question += fmt.Sprintf("\n\nWorkspace: %s", cwd)
+			}
+		} else {
+			header = "Tool Exec"
+			question = fmt.Sprintf("Allow agent to run tool '%s'?\nParams: %v", task.Tool, task.Args)
+		}
+
+		askEvent := domain.AskUserEvent{
+			Questions: []domain.AskUserQuestion{
+				{
+					Header:   header,
+					Question: question,
+					Type:     domain.QuestionTypeYesNo,
+				},
+			},
+			ResponseChan: make(chan domain.AskUserResponse, 1),
+		}
+
+		ctx.Emit(askEvent)
+
+		select {
+		case resp := <-askEvent.ResponseChan:
+			if resp.Cancelled || len(resp.Answers) == 0 || resp.Answers[0] != "yes" {
+				err := types.New(types.ErrCodePermissionDenied, "user denied execution")
+				return domain.Result{
+					TaskID:  task.ID,
+					Success: false,
+					Error:   err.Error(),
+				}, err
+			}
+		case <-time.After(10 * time.Minute):
+			err := types.New(types.ErrCodePermissionDenied, "execution confirmation timed out")
+			return domain.Result{
+				TaskID:  task.ID,
+				Success: false,
+				Error:   err.Error(),
+			}, err
+		case <-ctx.Done():
+			err := types.New(types.ErrCodeInternal, "context cancelled during approval")
+			return domain.Result{
+				TaskID:  task.ID,
+				Success: false,
+				Error:   err.Error(),
+			}, err
+		}
+	}
+
 	// 1. Audit Log: Tool Execution Started
 	if r.auditLog != nil {
 		_ = r.auditLog.Record(ctx, security.AuditEntry{
@@ -118,32 +193,26 @@ func (r *Runtime) Execute(ctx *ExecutionContext, task domain.Task) (domain.Resul
 	return result, nil
 }
 
-// ExecuteBatch runs multiple tools in parallel.
+// ExecuteBatch runs multiple tools sequentially to ensure predictable state manipulation.
+// It acts as a queue: the next command waits for the previous one to finish.
 func (r *Runtime) ExecuteBatch(ctx *ExecutionContext, tasks []domain.Task) ([]domain.Result, error) {
 	if r.registry == nil {
 		return nil, types.New(types.ErrCodeInternal, "runtime registry is not initialized")
 	}
 
 	results := make([]domain.Result, len(tasks))
-	errors := make([]error, len(tasks))
-	var wg sync.WaitGroup
 
 	for i, task := range tasks {
-		wg.Add(1)
-		go func(idx int, t domain.Task) {
-			defer wg.Done()
-			res, err := r.Execute(ctx, t)
-			results[idx] = res
-			errors[idx] = err
-		}(i, task)
-	}
-
-	wg.Wait()
-
-	// Return the first error encountered, if any (or we could wrap all of them)
-	for _, err := range errors {
+		res, err := r.Execute(ctx, task)
+		results[i] = res
+		
+		// Fast-fail: Stop executing the queue if a command fails
 		if err != nil {
 			return results, err
+		}
+		if !res.Success {
+			// Stop execution on logical failure even if err is nil
+			return results, types.Newf(types.ErrCodeToolExecution, "task %s failed", task.ID)
 		}
 	}
 

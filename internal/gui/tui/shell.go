@@ -2,8 +2,8 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -14,8 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/creack/pty"
 )
-
-
 
 // ShellOutputMsg carries raw bytes from the PTY.
 type ShellOutputMsg []byte
@@ -34,22 +32,22 @@ type ShellModel struct {
 	reader io.ReadCloser
 	writer io.WriteCloser
 	cmd    *exec.Cmd
-	
+
 	viewport viewport.Model
 	width    int
 	height   int
-	
+
 	buffer      []byte // Internal ring-buffer for output
 	active      bool
 	commandName string // To detect interactive apps
 	focused     bool
-	
+
 	mu sync.Mutex
 }
 
 func NewShellModel(width, height int) *ShellModel {
 	vp := viewport.New(width, height)
-	
+
 	return &ShellModel{
 		viewport: vp,
 		width:    width,
@@ -82,7 +80,7 @@ func (m *ShellModel) RunCommand(command string, args []string) tea.Cmd {
 		} else {
 			shellArgs = append([]string{"/C", command}, args...)
 		}
-		
+
 		c = exec.Command(shell, shellArgs...)
 	} else {
 		// Linux/macOS: Try bash then sh
@@ -100,11 +98,11 @@ func (m *ShellModel) RunCommand(command string, args []string) tea.Cmd {
 		// pty.Start doesn't support Windows. Use pipes instead.
 		pr, pw, _ := os.Pipe() // Output: Cmd -> TUI
 		ir, iw, _ := os.Pipe() // Input:  TUI -> Cmd
-		
+
 		c.Stdout = pw
 		c.Stderr = pw
 		c.Stdin = ir
-		
+
 		if err := c.Start(); err != nil {
 			_ = pw.Close()
 			_ = pr.Close()
@@ -112,12 +110,12 @@ func (m *ShellModel) RunCommand(command string, args []string) tea.Cmd {
 			_ = ir.Close()
 			return func() tea.Msg { return ShellExitMsg{Err: err, ExitCode: -1} }
 		}
-		
+
 		m.reader = pr
 		m.writer = iw
 		m.cmd = c
 
-		// We need to close the write-end once the command exits, 
+		// We need to close the write-end once the command exits,
 		// otherwise our reader will block forever.
 		go func() {
 			_ = c.Wait()
@@ -168,7 +166,7 @@ func (m *ShellModel) waitForExit() tea.Cmd {
 		if err != nil && strings.Contains(err.Error(), "already called Wait") {
 			err = nil
 		}
-		
+
 		code := 0
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code = exitErr.ExitCode()
@@ -210,7 +208,7 @@ func (m *ShellModel) Update(msg tea.Msg) (*ShellModel, tea.Cmd) {
 				return ToggleShellMsg{}
 			})
 		}
-		
+
 		if msg.ExitCode != 0 {
 			m.viewport.SetContent(m.viewport.View() + fmt.Sprintf("\n\n[Process exited with code %d]", msg.ExitCode))
 		}

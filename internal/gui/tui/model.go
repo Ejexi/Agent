@@ -11,7 +11,9 @@ import (
 	"github.com/SecDuckOps/agent/internal/gui/tui/terminal"
 	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/skills"
+	agent_domain "github.com/SecDuckOps/agent/internal/domain"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
+	"github.com/SecDuckOps/agent/internal/gui/tui/components"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -35,18 +37,19 @@ const (
 
 // Message represents a single chat message in the conversation.
 type Message struct {
-	Type      MessageType
-	Content   string
+	Type         MessageType
+	Content      string
 	Sender       string
 	Timestamp    time.Time
 	TableHeaders []string
 	TableData    [][]string
+	Checkpoint   string
 }
 
 // AgentMessage is received from the backend via msgChan.
 type AgentMessage struct {
-	Content string
-	Type    MessageType
+	Content      string
+	Type         MessageType
 	Usage        shared_domain.TokenUsage
 	Model        string
 	TableHeaders []string
@@ -93,7 +96,7 @@ type Toast struct {
 // ── Model ──────────────────────────────────────────────────────────
 
 const (
-	minTerminalWidth  = 60  // absolute floor — below this, show warning
+	minTerminalWidth  = 60 // absolute floor — below this, show warning
 	minTerminalHeight = 16
 	// No max width enforced — fill the terminal
 )
@@ -133,6 +136,13 @@ type model struct {
 	activePopup   PopupType
 	toast         *Toast
 
+	// Ask User
+	askDialog      *components.AskUserDialog
+	askChan        chan<- agent_domain.AskUserResponse
+	isExitPrompt   bool
+	isToolApproval bool
+	activeSessionID string
+
 	// Menu
 	showMenu      bool
 	menuSelection int
@@ -145,8 +155,15 @@ type model struct {
 
 	// Session & Events (Phase 1 Enhancements)
 	appSessionManager ports.AppSessionManager
+	sessionManager    ports.SessionManager
 	eventBus          ports.EventBusPort
 	skillRegistry     skills.Registry
+
+	// plan mode
+	inPlanMode bool
+
+	// Queue for messages sent while agent is busy
+	queuedMessages []string
 
 	// Shell
 	shellActive bool
@@ -168,13 +185,13 @@ type model struct {
 }
 
 // NewModel creates an initialised model with the given terminal capabilities.
-func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionManager ports.AppSessionManager, eventBus ports.EventBusPort, skillRegistry skills.Registry) model {
+func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionManager ports.AppSessionManager, sessionManager ports.SessionManager, eventBus ports.EventBusPort, skillRegistry skills.Registry) model {
 	// ── Textarea ────────────────────────────────────────────────────
 	ta := textarea.New()
 	ta.Placeholder = "Type a message, @file to attach, ! for shell, / for commands"
 	ta.Focus()
-	ta.CharLimit = 32000 // support large pastes
-	ta.MaxHeight = 1    // grows up to 12 lines before scrolling
+	ta.CharLimit = 4000 // support large pastes
+	ta.MaxHeight = 12    // grows up to 12 lines before scrolling
 	ta.ShowLineNumbers = false
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(Theme.Text)
@@ -205,7 +222,7 @@ func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionMa
 	// Apply horizontal gradient
 	lines := strings.Split(asciiLogo, "\n")
 	var coloredLines []string
-	
+
 	for _, line := range lines {
 		if line == "" {
 			continue
@@ -216,13 +233,13 @@ func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionMa
 			// Calculate gradient from left to right (Dark Gray to White)
 			// Start: #444444, End: #FFFFFF
 			ratio := float64(i) / float64(len(chars))
-			
+
 			// Color interpolation from dark gray to white
 			// To avoid being completely invisible on black terminals, we start at 0x44
 			val := int(0x44 + (0xFF-0x44)*ratio)
-			
+
 			hexColor := fmt.Sprintf("#%02X%02X%02X", val, val, val)
-			
+
 			coloredLine += lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor)).Render(string(char))
 		}
 		coloredLines = append(coloredLines, coloredLine)
@@ -245,8 +262,10 @@ func NewModel(caps terminal.TerminalCapabilities, modelName string, appSessionMa
 		logo:               logo,
 		dynamicSuggestions: eng.GetSuggestions(context.Background()),
 		appSessionManager:  appSessionManager,
+		sessionManager:     sessionManager,
 		eventBus:           eventBus,
 		skillRegistry:      skillRegistry,
+		queuedMessages:     []string{},
 	}
 }
 

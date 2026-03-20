@@ -39,7 +39,7 @@ func RenderHintBar(width int, cwd string) string {
 	leftBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Background(lipgloss.AdaptiveColor{Light: "#AAAAAA", Dark: "#2A2A2A"}). // Match chip background style
-		Padding(0, 2). // Wider padding to match User's request `  D:\...  `
+		Padding(0, 2).                                                         // Wider padding to match User's request `  D:\...  `
 		MarginLeft(1).
 		Render(cwd)
 

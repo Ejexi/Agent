@@ -26,11 +26,11 @@ func CommandDrawer(results []interface{}, selectedIndex int, width int, title st
 
 	var rows []string
 	for i, res := range results {
-		// We use interface{} here to avoid circular imports if needed, 
+		// We use interface{} here to avoid circular imports if needed,
 		// but we expect CommandInfo or FileInfo
 		name := ""
 		info := ""
-		
+
 		if m, ok := res.(map[string]string); ok {
 			name = m["name"]
 			info = m["info"]

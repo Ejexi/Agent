@@ -45,12 +45,12 @@ func (m model) View() string {
 	inputH := components.InputHeight(m.textarea)
 	hintH := 1
 	loadingH := 1
-	
+
 	cwd := ""
 	if m.engine != nil {
 		cwd = m.engine.GetCwd()
 	}
-	
+
 	header := components.HeaderView(m.width, "0.2.0", "admin")
 	headerH := lipgloss.Height(header)
 
@@ -107,6 +107,7 @@ func (m model) View() string {
 			Timestamp:    msg.Timestamp,
 			TableHeaders: msg.TableHeaders,
 			TableData:    msg.TableData,
+			Checkpoint:   msg.Checkpoint,
 		}
 	}
 
@@ -117,10 +118,31 @@ func (m model) View() string {
 	var isShell = m.mode == ShellDiscoveryMode || m.mode == ShellExecutionMode
 
 	if m.activePopup != PopupNone {
-		// When a popup is active, we render an empty dimmed area for messages
+		// When a popup is active, we typically render an empty dimmed area for messages
 		// to create a "Z-index / Blur" focus on the popup.
-		msgs = lipgloss.Place(mainW, msgsH, lipgloss.Center, lipgloss.Center,
-			components.RenderShortcutsPopup(mainW, msgsH, m.caps.IsLegacy))
+		if m.activePopup == PopupConfirm && m.askDialog != nil {
+			if m.isExitPrompt {
+				msgs = lipgloss.Place(mainW, msgsH, lipgloss.Center, lipgloss.Center,
+					components.RenderExitPopup(mainW, msgsH, m.caps.IsLegacy, m.askDialog.SelectedIsYes(0)))
+			} else {
+				// Inline execution/ask dialogs into the chat view for better context
+				dialogView := m.askDialog.View()
+				dialogH := lipgloss.Height(dialogView)
+				
+				availH := msgsH - dialogH - 1 // 1 for top padding
+				if availH < 0 {
+					availH = 0
+				}
+				
+				chatAreaStr := components.RenderMessageArea(chatMsgs, mainW, availH, m.scroll, m.logo, m.dynamicSuggestions)
+				dialogAligned := lipgloss.NewStyle().Padding(1, 0, 0, 2).Render(dialogView)
+				
+				msgs = lipgloss.JoinVertical(lipgloss.Left, chatAreaStr, dialogAligned)
+			}
+		} else {
+			msgs = lipgloss.Place(mainW, msgsH, lipgloss.Center, lipgloss.Center,
+				components.RenderShortcutsPopup(mainW, msgsH, m.caps.IsLegacy))
+		}
 		input = components.RenderInput(m.textarea, mainW, m.caps.IsLegacy, isShell)
 		// Dim the input while popup is active
 		input = dim(input)

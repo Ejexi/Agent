@@ -10,12 +10,12 @@ import (
 // TerminalCapabilities holds detected terminal features and fallback hints.
 type TerminalCapabilities struct {
 	ColorProfile termenv.Profile // Ascii | ANSI | ANSI256 | TrueColor
-	Unicode      bool           // Can render Unicode box-drawing chars
-	MouseSupport bool           // Safe to enable mouse capture
-	TrueColor    bool           // 16M color support
-	IsLegacy     bool           // CMD, XTerm, URxvt, LXTerminal
-	IsTmux       bool           // Running inside tmux/screen
-	Name         string         // Detected terminal name
+	Unicode      bool            // Can render Unicode box-drawing chars
+	MouseSupport bool            // Safe to enable mouse capture
+	TrueColor    bool            // 16M color support
+	IsLegacy     bool            // CMD, XTerm, URxvt, LXTerminal
+	IsTmux       bool            // Running inside tmux/screen
+	Name         string          // Detected terminal name
 }
 
 // DetectTerminal inspects environment variables and the termenv library to

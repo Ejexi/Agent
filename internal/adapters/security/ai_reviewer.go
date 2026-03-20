@@ -8,6 +8,10 @@ import (
 
 	"github.com/SecDuckOps/shared/llm/domain"
 	"github.com/SecDuckOps/shared/ports"
+	"github.com/SecDuckOps/shared/types"
+
+	agent_domain "github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/kernel"
 )
 
 // AIReviewer implements ports.ThinkingPort.
@@ -33,7 +37,7 @@ func (a *AIReviewer) Analyze(ctx context.Context, command string, args []string)
 		llm = a.llmRegistry.Default()
 	}
 	if llm == nil {
-		return domain.GenerationResult{}, fmt.Errorf("no LLM provider found")
+		return domain.GenerationResult{}, types.New(types.ErrCodeNotFound, "no LLM provider found")
 	}
 
 	prompt := fmt.Sprintf(`You are the DuckOps Command Reviewer.
@@ -49,12 +53,33 @@ Response format: Just the rationale text, no prefix like "Rationale:".`, command
 	var result domain.GenerationResult
 	var err error
 	maxRetries := 2
+	execCtx, _ := kernel.FromContext(ctx)
+
 	for retry := 0; retry <= maxRetries; retry++ {
-		result, err = llm.Generate(ctx, []domain.Message{
+		ch, streamErr := llm.Stream(ctx, []domain.Message{
 			{Role: domain.RoleUser, Content: prompt},
 		}, nil)
-		if err == nil {
-			break
+		
+		if streamErr == nil {
+			err = nil
+			for chunk := range ch {
+				if chunk.Error != nil {
+					err = chunk.Error
+					break
+				}
+				result.Content += chunk.Content
+				if execCtx != nil && chunk.Content != "" {
+					execCtx.Emit(agent_domain.ThoughtChunkEvent{Chunk: chunk.Content})
+				}
+				result.Usage.PromptTokens += chunk.Usage.PromptTokens
+				result.Usage.CompletionTokens += chunk.Usage.CompletionTokens
+				result.Usage.TotalTokens += chunk.Usage.TotalTokens
+			}
+			if err == nil {
+				break
+			}
+		} else {
+			err = streamErr
 		}
 		if strings.Contains(err.Error(), "429") && retry < maxRetries {
 			select {
@@ -82,12 +107,28 @@ Response format: Just the rationale text, no prefix like "Rationale:".`, command
 				continue
 			}
 
-			result, err = fallbackLLM.Generate(ctx, []domain.Message{
+			ch, streamErr := fallbackLLM.Stream(ctx, []domain.Message{
 				{Role: domain.RoleUser, Content: prompt},
 			}, nil)
-			if err == nil {
-				result.Content = strings.TrimSpace(result.Content)
-				return result, nil
+			if streamErr == nil {
+				var streamFail error
+				for chunk := range ch {
+					if chunk.Error != nil {
+						streamFail = chunk.Error
+						break
+					}
+					result.Content += chunk.Content
+					if execCtx != nil && chunk.Content != "" {
+						execCtx.Emit(agent_domain.ThoughtChunkEvent{Chunk: chunk.Content})
+					}
+					result.Usage.PromptTokens += chunk.Usage.PromptTokens
+					result.Usage.CompletionTokens += chunk.Usage.CompletionTokens
+					result.Usage.TotalTokens += chunk.Usage.TotalTokens
+				}
+				if streamFail == nil {
+					result.Content = strings.TrimSpace(result.Content)
+					return result, nil
+				}
 			}
 			tried[pName] = true
 		}
@@ -104,7 +145,7 @@ func (a *AIReviewer) Reflect(ctx context.Context, command string, args []string,
 		llm = a.llmRegistry.Default()
 	}
 	if llm == nil {
-		return domain.GenerationResult{}, fmt.Errorf("no LLM provider found")
+		return domain.GenerationResult{}, types.New(types.ErrCodeNotFound, "no LLM provider found")
 	}
 
 	content := stdout

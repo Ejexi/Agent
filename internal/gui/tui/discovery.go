@@ -93,29 +93,29 @@ func (d *CommandDiscovery) Search(query string) []CommandInfo {
 	}
 
 	matches := fuzzy.Find(query, names)
-	
+
 	result := make([]CommandInfo, 0, len(matches))
 	// Limit to top 10 results
 	limit := len(matches)
 	if limit > 10 {
 		limit = 10
 	}
-	
+
 	for i := 0; i < limit; i++ {
 		result = append(result, d.commands[matches[i].Index])
 	}
-	
+
 	return result
 }
 
 func (d *CommandDiscovery) SearchFiles(query string) []CommandInfo {
 	cwd, _ := os.Getwd()
-	
-	// We'll perform a fast recursive walk. 
+
+	// We'll perform a fast recursive walk.
 	// To keep it performant, we limit the depth or the number of items.
 	var names []string
 	var fullInfos []CommandInfo
-	
+
 	// Skip common noise directories
 	skipDirs := map[string]bool{
 		".git":         true,
@@ -133,7 +133,7 @@ func (d *CommandDiscovery) SearchFiles(query string) []CommandInfo {
 		if err != nil || count >= maxItems {
 			return nil
 		}
-		
+
 		name := d.Name()
 		if d.IsDir() {
 			if skipDirs[name] {
@@ -164,15 +164,19 @@ func (d *CommandDiscovery) SearchFiles(query string) []CommandInfo {
 	if query == "" {
 		// Just show top relative items
 		limit := len(fullInfos)
-		if limit > 10 { limit = 10 }
+		if limit > 10 {
+			limit = 10
+		}
 		return fullInfos[:limit]
 	}
 
 	matches := fuzzy.Find(query, names)
 	result := make([]CommandInfo, 0, len(matches))
 	limit := len(matches)
-	if limit > 10 { limit = 10 }
-	
+	if limit > 10 {
+		limit = 10
+	}
+
 	for i := 0; i < limit; i++ {
 		result = append(result, fullInfos[matches[i].Index])
 	}

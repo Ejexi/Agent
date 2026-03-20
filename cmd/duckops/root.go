@@ -21,10 +21,12 @@ var (
 )
 
 var (
-	cfgFile  string
-	verbose  bool
-	cliMode  bool
-	scanMode bool
+	cfgFile       string
+	verbose       bool
+	cliMode       bool
+	scanMode      bool
+	resumeSession string // --resume <session-id or "latest">
+	outputFormat  string // --format text|json|sarif
 )
 
 // Exit codes per Phase 3 spec
@@ -67,8 +69,8 @@ var rootCmd = &cobra.Command{
 
 		// 4. Decide mode
 		if scanMode {
-			// Conversational scan agent REPL (Phase 3)
-			app.DuckOpsAgent.Run(context.Background())
+			// Conversational scan agent REPL — apply --format flag
+			app.DuckOpsAgent.WithFormat(outputFormat).Run(context.Background())
 			return nil
 		}
 
@@ -102,7 +104,21 @@ var rootCmd = &cobra.Command{
 				actualModel = defaultLLM.Model()
 			}
 		}
-		runTUI(app.Kernel, actualModel, app.AppSessions, app.EventBus, app.SkillRegistry)
+
+		// If --resume was passed, open the session browser or resume directly
+		if resumeSession != "" && app.CheckpointStore != nil {
+			if resumeSession == "latest" {
+				// Resolve to the most recent session ID
+				sessions, err := app.CheckpointStore.ListSessions()
+				if err == nil && len(sessions) > 0 {
+					resumeSession = sessions[0].SessionID
+				}
+			}
+			// Pass the resume target via the TUI — it will load on start
+			_ = resumeSession // picked up by openSessionBrowser / resumeSession flow in TUI
+		}
+
+		runTUI(app.Kernel, actualModel, app.AppSessions, app.Sessions, app.EventBus, app.SkillRegistry, app.CheckpointStore)
 		return nil
 	},
 }
@@ -112,6 +128,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.Flags().BoolVar(&cliMode, "cli", false, "launch the LLM REPL")
 	rootCmd.Flags().BoolVar(&scanMode, "scan", false, "launch the conversational scan agent")
+	rootCmd.Flags().StringVarP(&resumeSession, "resume", "r", "", "resume a session by ID, or 'latest' for the most recent")
+	rootCmd.Flags().StringVarP(&outputFormat, "format", "f", "text", "output format: text, json, sarif")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(serveCmd)

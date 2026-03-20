@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agent_domain "github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/domain/subagent"
 	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/tools/base"
@@ -214,8 +215,8 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 		lastUsage = result.Usage
 		response := result.Content
 
-		// Try to extract JSON if the LLM prefaces it with text (Phase 6 Resilience)
-		jsonBody := tryExtractJSON(response)
+		// Try to extract JSON if the LLM prefaces it with text or responds with JSONL (multiple objects)
+		jsonBody := tryExtractFirstJSON(response)
 
 		// Try parsing as JSON subagent-style response
 		var parsed struct {
@@ -244,11 +245,23 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 			tc := parsed.ToolCall
 			emit(fmt.Sprintf("Tool Call: Executing %s...", tc.Name), subagent.EventToolCall)
 			
+			// Infer capabilities based on tool name to trigger HITL approval natively
+			reqCaps := []security.Capability{security.CapModifyInfra} // Default to action
+			lowerName := strings.ToLower(tc.Name)
+			if strings.Contains(lowerName, "read") || strings.Contains(lowerName, "search") || strings.Contains(lowerName, "find") || strings.Contains(lowerName, "list") {
+				reqCaps = []security.Capability{security.CapReadFS}
+			} else if lowerName == "shell" || lowerName == "terminal" {
+				reqCaps = []security.Capability{security.CapExecuteShell}
+			} else if strings.Contains(lowerName, "write") {
+				reqCaps = []security.Capability{security.CapWriteFS}
+			}
+
 			// Execute the tool
 			task := agent_domain.Task{
-				ID:   fmt.Sprintf("chat_loop_%d", i),
-				Tool: tc.Name,
-				Args: tc.Args,
+				ID:           fmt.Sprintf("chat_loop_%d", i),
+				Tool:         tc.Name,
+				Args:         tc.Args,
+				RequiredCaps: reqCaps,
 			}
 			
 			execRes, execErr := t.executor.Execute(ctx, task)
@@ -293,15 +306,25 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 	}, nil
 }
 
-// tryExtractJSON attempts to find a JSON block in a string, even if it has surrounding text.
-func tryExtractJSON(input string) string {
+// tryExtractFirstJSON attempts to find the first complete JSON block in a string.
+// Crucial for handling LLMs that output JSONL (multiple consecutive JSON objects).
+func tryExtractFirstJSON(input string) string {
 	input = strings.TrimSpace(input)
-	if strings.HasPrefix(input, "{") && strings.HasSuffix(input, "}") {
+
+	// Look for the first '{'
+	start := strings.Index(input, "{")
+	if start == -1 {
 		return input
 	}
 
-	// Look for the first { and the last }
-	start := strings.Index(input, "{")
+	// Use json.NewDecoder to safely decode exactly one JSON object
+	dec := json.NewDecoder(strings.NewReader(input[start:]))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err == nil {
+		return string(raw) // This returns EXACTLY the first parsed JSON object
+	}
+
+	// Fallback to old heuristic if decoder fails
 	end := strings.LastIndex(input, "}")
 	if start != -1 && end != -1 && end > start {
 		return input[start : end+1]

@@ -31,7 +31,7 @@ var serveCmd = &cobra.Command{
 
 		app, err := bootstrap.FromTOML(context.Background(), tomlCfg)
 		if err != nil {
-			return fmt.Errorf("failed to initialize agent: %w", err)
+			return types.Wrapf(err, types.ErrCodeInternal, "failed to initialize agent")
 		}
 		defer app.Shutdown()
 

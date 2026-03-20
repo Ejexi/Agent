@@ -2,10 +2,12 @@ package skills
 
 import (
 	"embed"
-	"fmt"
+	
 	"io/fs"
 	"path/filepath"
 	"strings"
+
+	"github.com/SecDuckOps/shared/types"
 )
 
 //go:embed data
@@ -44,7 +46,7 @@ func NewEmbeddedRegistry() (Registry, error) {
 
 		contentBytes, err := embeddedSkills.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("failed to read skill file %s: %w", path, err)
+			return types.Wrapf(err, types.ErrCodeInternal, "failed to read skill file %s", path)
 		}
 
 		content := string(contentBytes)
@@ -77,7 +79,7 @@ func NewEmbeddedRegistry() (Registry, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk embedded skills: %w", err)
+		return nil, types.Wrapf(err, types.ErrCodeInternal, "failed to walk embedded skills")
 	}
 
 	return reg, nil
@@ -87,7 +89,7 @@ func (r *embeddedRegistry) GetSkill(name string) (*Skill, error) {
 	if skill, ok := r.skills[name]; ok {
 		return &skill, nil
 	}
-	return nil, fmt.Errorf("skill '%s' not found", name)
+	return nil, types.Newf(types.ErrCodeNotFound, "skill '%s' not found", name)
 }
 
 func (r *embeddedRegistry) ListSkills() []Skill {

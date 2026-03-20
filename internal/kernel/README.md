@@ -1,44 +1,15 @@
-# kernel/
+# Kernel Logic (`agent/internal/kernel`)
 
-Execution authority of the DuckOps Agent.
-
-## Golden Rule
-
-> **The Kernel is the ONLY component allowed to execute tools.**
-
-```go
-// ✅ Correct
-kernel.Execute(task)
-
-// ❌ Forbidden
-tool.Run()
-```
+## Purpose
+The `kernel` directory implements the low-level processing engine for managing agent context, LLM interactions, dispatching tools, and executing core reasoning loops. It serves as the "brain" orchestrating the execution flow of prompts to actions.
 
 ## Files
+- `kernel.go`: Central initialization and structuring of the AI kernel.
+- `dispatcher.go`: Logic for routing tasks or outputs to the right handlers.
+- `orchestrator.go`: Low-level control flow over multiple prompts and responses.
+- `runtime.go`: The execution environment handling LLM lifecycle, token tracking, and safety guards.
+- `context.go`: Maintains the specific runtime context provided to LLM sessions.
 
-| File             | Description                                                     |
-| ---------------- | --------------------------------------------------------------- |
-| `kernel.go`      | `Kernel` struct — coordinates Registry, Runtime, and Dispatcher |
-| `registry.go`    | `Registry` — thread-safe tool registration and lookup           |
-| `runtime.go`     | `Runtime` — single and parallel tool execution                  |
-| `dispatcher.go`  | `Dispatcher` — listens on message bus, routes tasks to Runtime  |
-| `kernel_test.go` | Unit tests for the Kernel                                       |
-
-## Dependencies
-
-The Kernel depends on:
-
-- `internal/domain` — `Tool`, `Task`, `Result` types
-- `internal/ports` — `BusPort`, `MemoryPort` interfaces
-- `shared/llm/domain` — `LLMRegistry`
-- `shared/ports` — `Logger`
-
-It does **not** depend on any adapters or infrastructure.
-
-## Execution Flow
-
-```
-RegisterTool(tool) → Registry stores tool
-Execute(task)      → Runtime.Execute → Registry.Get → tool.ExecuteRaw
-StartDispatcher()  → Dispatcher.Start → bus.Subscribe → Runtime.Execute → bus.Publish
-```
+## Architectural Rules
+- The Kernel wraps interactions with the LLM provider, providing a unified internal interface regardless of the specific AI backend.
+- It interfaces with standard `domain` tools and actions but isolates the rest of the application from raw AI prompt management intricacies.

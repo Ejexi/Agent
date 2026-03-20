@@ -15,12 +15,12 @@ import (
 const SidePanelWidth = 34
 
 var (
-	sidePanelBorder  = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#444444"}
-	sidePanelTitle   = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9D7BFF"}
-	sidePanelText    = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
-	sidePanelMuted   = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
-	sidePanelDir     = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#64B5F6"}
-	sidePanelFile    = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#81C784"}
+	sidePanelBorder = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#444444"}
+	sidePanelTitle  = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#9D7BFF"}
+	sidePanelText   = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
+	sidePanelMuted  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
+	sidePanelDir    = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#64B5F6"}
+	sidePanelFile   = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#81C784"}
 )
 
 // Pre-built styles that are purely cosmetic (no dynamic width/height).

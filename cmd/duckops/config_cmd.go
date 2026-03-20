@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/SecDuckOps/agent/internal/config"
+	"github.com/SecDuckOps/shared/types"
 )
 
 var configCmd = &cobra.Command{
@@ -15,7 +16,7 @@ var configCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadTOML()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return types.Wrapf(err, types.ErrCodeInternal, "failed to load config")
 		}
 
 		dir, _ := config.DuckOpsDir()

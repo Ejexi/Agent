@@ -1,13 +1,14 @@
 package kernel
 
 import (
-	"fmt"
+
 	"sync"
 
 	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/domain/orchestration"
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/ports"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // Orchestrator executes a DAG-based execution plan with rollback support.
@@ -28,7 +29,7 @@ func NewOrchestrator(runtime *Runtime, auditLog ports.AuditLogPort) *Orchestrato
 func (o *Orchestrator) ExecutePlan(ctx *ExecutionContext, plan *orchestration.ExecutionPlan) error {
 	levels, err := plan.TopologicalSort()
 	if err != nil {
-		return fmt.Errorf("orchestrator: failed to sort plan: %w", err)
+		return types.Wrapf(err, types.ErrCodeInternal, "orchestrator: failed to sort plan")
 	}
 
 	// Audit: Plan execution started
@@ -53,7 +54,7 @@ func (o *Orchestrator) ExecutePlan(ctx *ExecutionContext, plan *orchestration.Ex
 		if err := o.executeLevel(ctx, plan, level); err != nil {
 			// Trigger rollback for all previously completed tasks
 			o.rollback(ctx, plan)
-			return fmt.Errorf("orchestrator: execution failed, rollback triggered: %w", err)
+			return types.Wrapf(err, types.ErrCodeExecutionFailed, "orchestrator: execution failed, rollback triggered")
 		}
 	}
 
@@ -81,7 +82,7 @@ func (o *Orchestrator) executeLevel(ctx *ExecutionContext, plan *orchestration.E
 				mu.Lock()
 				o.updateTaskStatus(plan, dagTask.ID, orchestration.DAGStatusFailed)
 				mu.Unlock()
-				errCh <- fmt.Errorf("task %s failed: %w", dagTask.ID, err)
+				errCh <- types.Wrapf(err, types.ErrCodeExecutionFailed, "task %s failed", dagTask.ID)
 				return
 			}
 
@@ -89,7 +90,7 @@ func (o *Orchestrator) executeLevel(ctx *ExecutionContext, plan *orchestration.E
 				mu.Lock()
 				o.updateTaskStatus(plan, dagTask.ID, orchestration.DAGStatusFailed)
 				mu.Unlock()
-				errCh <- fmt.Errorf("task %s returned failure: %s", dagTask.ID, result.Error)
+				errCh <- types.Newf(types.ErrCodeExecutionFailed, "task %s returned failure: %s", dagTask.ID, result.Error)
 				return
 			}
 

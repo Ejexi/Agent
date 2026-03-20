@@ -95,10 +95,14 @@ func (k *Kernel) ExecuteBatch(ctx *ExecutionContext, tasks []domain.Task) ([]dom
 }
 
 // ExecuteCompat satisfies the ports.ToolExecutor interface using context.Context.
-// It wraps the incoming context into an ExecutionContext with system-level defaults.
+// It tries to extract an existing ExecutionContext to preserve callbacks (like UI events).
+// If none exists, it wraps the incoming context with system-level defaults.
 // This is used by subagents and external consumers that don't manage capabilities directly.
 func (k *Kernel) ExecuteCompat(ctx context.Context, task domain.Task) (domain.Result, error) {
-	execCtx := NewExecutionContext(ctx, task.SessionID, "system:compat", nil) // nil caps = no restrictions
+	execCtx, ok := FromContext(ctx)
+	if !ok {
+		execCtx = NewExecutionContext(ctx, task.SessionID, "system:compat", nil) // nil caps = no restrictions
+	}
 	return k.Execute(execCtx, task)
 }
 

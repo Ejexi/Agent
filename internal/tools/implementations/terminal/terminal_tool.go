@@ -8,18 +8,19 @@ import (
 	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/tools/base"
 	"github.com/SecDuckOps/shared/types"
+	
 )
 
 // TerminalParams defines the inputs for the TerminalTool.
 type TerminalParams struct {
-	Command   string            `json:"command"`
-	Args      []string          `json:"args,omitempty"`
-	Cwd       string            `json:"cwd,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	UsePTY    bool              `json:"use_pty,omitempty"`
-	Cols      int               `json:"cols,omitempty"`
-	Rows      int               `json:"rows,omitempty"`
-	Streaming bool              `json:"streaming,omitempty"`
+	Command   string            `json:"command" desc:"string - The command name (e.g., ls, pwd, cat, git, go, etc.)"`
+	Args      []string          `json:"args,omitempty" desc:"[]string - Arguments to pass to the command"`
+	Cwd       string            `json:"cwd,omitempty" desc:"string - Optional. Working directory (defaults to current dir)"`
+	Env       map[string]string `json:"env,omitempty" desc:"map[string]string - Optional. Environment variables. AVOID including standard system variables unless required for the specific command."`
+	UsePTY    bool              `json:"use_pty,omitempty" desc:"bool - Optional. Whether to use a PTY for interactive commands"`
+	Cols      int               `json:"cols,omitempty" desc:"int - Optional. Terminal columns for PTY"`
+	Rows      int               `json:"rows,omitempty" desc:"int - Optional. Terminal rows for PTY"`
+	Streaming bool              `json:"streaming,omitempty" desc:"bool - Optional. Whether to start as a streaming session"`
 }
 
 // TerminalTool acts as the bridge between the LLM Kernel Tool interface
@@ -44,16 +45,7 @@ func (t *TerminalTool) Schema() domain.ToolSchema {
 	return domain.ToolSchema{
 		Name:        "terminal",
 		Description: "Execute a command securely on the host operating system. Replaces both shell and filesystem tools.",
-		Parameters: map[string]string{
-			"command":   "string - The command name (e.g., ls, pwd, cat, git, go, etc.)",
-			"args":      "[]string - Arguments to pass to the command",
-			"cwd":       "string - Optional. Working directory (defaults to current dir)",
-			"env":       "map[string]string - Optional. Environment variables. AVOID including standard system variables unless required for the specific command.",
-			"use_pty":   "bool - Optional. Whether to use a PTY for interactive commands",
-			"cols":      "int - Optional. Terminal columns for PTY",
-			"rows":      "int - Optional. Terminal rows for PTY",
-			"streaming": "bool - Optional. Whether to start as a streaming session",
-		},
+		Parameters:  base.GenerateSchemaParams(TerminalParams{}),
 	}
 }
 
@@ -80,6 +72,8 @@ func (t *TerminalTool) Execute(ctx context.Context, params TerminalParams) (doma
 		Cols:        params.Cols,
 		Rows:        params.Rows,
 	}
+
+
 
 	if params.Streaming {
 		sessionID, err := t.dispatcher.Start(ctx, task)
@@ -120,9 +114,8 @@ func (t *TerminalTool) Execute(ctx context.Context, params TerminalParams) (doma
 		result.Data["raw_stdout"] = taskResult.Stdout
 		result.Data["raw_stderr"] = taskResult.Stderr
 	} else {
-		if taskResult.Stdout != "" {
-			result.Data["stdout"] = taskResult.Stdout
-		}
+		// Always set stdout so the LLM knows whether output was empty or missing
+		result.Data["stdout"] = taskResult.Stdout
 		if taskResult.Stderr != "" {
 			result.Data["stderr"] = taskResult.Stderr
 		}

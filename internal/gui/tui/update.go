@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,11 +11,16 @@ import (
 	"time"
 
 	"github.com/SecDuckOps/agent/internal/domain/subagent"
+	agent_domain "github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/engine"
 	"github.com/SecDuckOps/agent/internal/gui/tui/components"
+	plan_tools "github.com/SecDuckOps/agent/internal/tools/implementations/plan"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/google/shlex"
+	"github.com/google/uuid"
 )
 
 var ansiRegex = regexp.MustCompile(`\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`)
@@ -34,10 +40,47 @@ type agentResponseMsg struct {
 
 type toastDismissMsg struct{}
 
+// ── Helpers ─────────────────────────────────────────────────────────
+
+// syncTextareaHeight updates the textarea height clamped to [1, 12].
+func (m *model) syncTextareaHeight() {
+	lines := calculateTextareaHeight(m.textarea)
+	if lines > 12 {
+		lines = 12
+	} else if lines < 1 {
+		lines = 1
+	}
+	m.textarea.SetHeight(lines)
+}
+
+// resetTextarea clears the textarea content and resets height to 1.
+func (m *model) resetTextarea() {
+	m.textarea.Reset()
+	m.textarea.SetHeight(1)
+}
+
+// setTextareaWidth recalculates and applies the correct textarea width.
+func (m *model) setTextareaWidth() {
+	w := m.width - 6
+	if m.showSidePanel {
+		w -= components.SidePanelWidth
+	}
+	if w < 10 {
+		w = 10
+	}
+	m.textarea.SetWidth(w)
+}
+
+// dismissPopup tears down any active ask-dialog / popup state.
+func (m *model) dismissPopup() {
+	m.askDialog = nil
+	m.askChan = nil
+	m.activePopup = PopupNone
+}
+
 // ── Agent command ───────────────────────────────────────────────────
 
 func (m model) runAgent(userInput string) tea.Cmd {
-	// Expand @file mentions → inject file content into the prompt
 	expanded := expandMentions(userInput)
 	return func() tea.Msg {
 		ch, err := m.engine.StreamChat(context.Background(), expanded)
@@ -49,25 +92,24 @@ func (m model) runAgent(userInput string) tea.Cmd {
 }
 
 // expandMentions replaces @path/to/file tokens with the file's content.
-// Supports: @file.go  @./relative/path  @/absolute/path
-// Files that don't exist or are too large (>100KB) are left as-is with a note.
 func expandMentions(input string) string {
 	words := strings.Fields(input)
-	hasAtMention := false
+	hasAt := false
 	for _, w := range words {
 		if strings.HasPrefix(w, "@") && len(w) > 1 {
-			hasAtMention = true
+			hasAt = true
 			break
 		}
 	}
-	if !hasAtMention {
+	if !hasAt {
 		return input
 	}
 
+	cwd, _ := os.Getwd()
 	var sb strings.Builder
 	for i, word := range words {
 		if i > 0 {
-			sb.WriteString(" ")
+			sb.WriteByte(' ')
 		}
 		if !strings.HasPrefix(word, "@") || len(word) <= 1 {
 			sb.WriteString(word)
@@ -75,21 +117,17 @@ func expandMentions(input string) string {
 		}
 
 		filePath := strings.TrimPrefix(word, "@")
-
-		// Resolve relative paths from cwd
 		if !filepath.IsAbs(filePath) {
-			cwd, _ := os.Getwd()
 			filePath = filepath.Join(cwd, filePath)
 		}
 
 		info, err := os.Stat(filePath)
 		if err != nil {
-			// File not found — keep token, let agent handle it
 			sb.WriteString(word)
 			continue
 		}
 
-		const maxSize = 100 * 1024 // 100KB
+		const maxSize = 100 * 1024
 		if info.Size() > maxSize {
 			sb.WriteString(fmt.Sprintf("[%s: file too large to inline (%d bytes)]", word, info.Size()))
 			continue
@@ -102,20 +140,18 @@ func expandMentions(input string) string {
 		}
 
 		ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
-		sb.WriteString(fmt.Sprintf("\n\n[Contents of %s]\n```%s\n%s\n```\n", filePath, ext, string(content)))
+		fmt.Fprintf(&sb, "\n\n[Contents of %s]\n```%s\n%s\n```\n", filePath, ext, content)
 	}
 	return sb.String()
 }
 
-type agentStreamMsg struct {
-	ch <-chan any
-}
+type agentStreamMsg struct{ ch <-chan any }
 
 func waitForAgentEvent(ch <-chan any) tea.Cmd {
 	return func() tea.Msg {
 		evt, ok := <-ch
 		if !ok {
-			return nil // Stream closed
+			return nil
 		}
 		return evt
 	}
@@ -126,13 +162,11 @@ func waitForAgentEvent(ch <-chan any) tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// Delegate to shell first if it needs to handle PTY output or exit
 	switch msg := msg.(type) {
 	case ShellOutputMsg:
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
 			if last.Type == AgentMsg && last.Sender == "DuckOps" {
-				// Strip code block markers if present to append inside
 				content := last.Content
 				if strings.HasSuffix(content, "```") {
 					content = strings.TrimSuffix(content, "```")
@@ -140,13 +174,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !strings.Contains(content, "```shell") {
 					content += "```shell\n"
 				}
-				content += stripANSI(string(msg))
-				last.Content = content + "```"
+				last.Content = content + stripANSI(string(msg)) + "```"
 			}
 		}
 		var cmd tea.Cmd
 		m.shell, cmd = m.shell.Update(msg)
 		return m, cmd
+
 	case ShellExitMsg:
 		var cmd tea.Cmd
 		m.shell, cmd = m.shell.Update(msg)
@@ -165,10 +199,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == subagent.EventThought {
 			content = strings.TrimPrefix(content, "Thinking: ")
 		}
+		if msg.Type == subagent.EventPaused {
+			var info *subagent.PauseInfo
+			if mData, ok := msg.Data.(map[string]interface{}); ok {
+				b, _ := json.Marshal(mData)
+				_ = json.Unmarshal(b, &info)
+			} else if pt, ok := msg.Data.(*subagent.PauseInfo); ok {
+				info = pt
+			}
+			if info != nil && info.Reason == subagent.PauseToolApproval {
+				m.activeSessionID = msg.SessionID
+				var qb strings.Builder
+				qb.WriteString("The agent wants to execute the following tool(s):\n")
+				for _, ptc := range info.PendingToolCalls {
+					argsStr := ""
+					if b, err := json.MarshalIndent(ptc.Args, "", "  "); err == nil {
+						argsStr = string(b)
+					}
+					fmt.Fprintf(&qb, "- %s\n%s\n", ptc.Name, argsStr)
+				}
+				qb.WriteString("\nDo you approve execution?")
+				m.askDialog = components.NewAskUserDialog([]agent_domain.AskUserQuestion{
+					{Header: "Security Gate", Question: qb.String(), Type: agent_domain.QuestionTypeYesNo},
+				}, m.width)
+				m.activePopup = PopupConfirm
+				m.isToolApproval = true
+				return m, nil
+			}
+		}
 		m = appendAggregatedThought(m, content)
 		return m, waitForAgentEvent(m.lastStreamCh)
 
+	case engine.ThoughtStreamEvent:
+		m = appendStreamedThought(m, msg.Chunk)
+		return m, waitForAgentEvent(m.lastStreamCh)
+
 	case engine.ThoughtEvent:
+		// Only append if we didn't already stream it into the last thought msg
+		if n := len(m.messages); n > 0 {
+			last := &m.messages[n-1]
+			if last.Type == ThoughtMsg && strings.HasSuffix(strings.TrimSpace(last.Content), strings.TrimSpace(msg.Rationale)) {
+				return m, waitForAgentEvent(m.lastStreamCh) // Already streamed
+			}
+		}
 		m = appendAggregatedThought(m, msg.Rationale)
 		return m, waitForAgentEvent(m.lastStreamCh)
 
@@ -176,18 +249,71 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = appendAggregatedThought(m, msg.Reflection)
 		return m, waitForAgentEvent(m.lastStreamCh)
 
-	// ── Agent response (Final Result) ────────────────────────────────
+	case agent_domain.AskUserEvent:
+		m.askDialog = components.NewAskUserDialog(msg.Questions, m.width)
+		m.askChan = msg.ResponseChan
+		m.activePopup = PopupConfirm
+		return m, waitForAgentEvent(m.lastStreamCh)
+
+	case agent_domain.PlanModeChangedEvent:
+		m.inPlanMode = msg.Active
+		status := "Exited plan mode"
+		if msg.Active {
+			status = "Entered plan mode"
+		}
+		if msg.Reason != "" {
+			status += fmt.Sprintf(" (%s)", msg.Reason)
+		}
+		m.toast = &Toast{Message: status, Level: ToastInfo}
+		return m, tea.Batch(
+			waitForAgentEvent(m.lastStreamCh),
+			tea.Tick(3*time.Second, func(time.Time) tea.Msg { return toastDismissMsg{} }),
+		)
+
+	case plan_tools.PlanReadyEvent:
+		respCh := make(chan agent_domain.AskUserResponse, 1)
+		m.askChan = respCh
+		m.askDialog = components.NewAskUserDialog([]agent_domain.AskUserQuestion{
+			{
+				Header:   "Plan Ready",
+				Question: fmt.Sprintf("Review plan at %s\nApprove execution?", msg.PlanPath),
+				Type:     agent_domain.QuestionTypeYesNo,
+			},
+		}, m.width)
+		m.activePopup = PopupConfirm
+		go func() {
+			ans := <-respCh
+			msg.ResponseChan <- plan_tools.PlanApproval{Approved: isYes(ans)}
+		}()
+		return m, waitForAgentEvent(m.lastStreamCh)
+
+	case agent_domain.SkillActivationEvent:
+		respCh := make(chan agent_domain.AskUserResponse, 1)
+		m.askChan = respCh
+		m.askDialog = components.NewAskUserDialog([]agent_domain.AskUserQuestion{
+			{
+				Header:   "Skill Activation",
+				Question: fmt.Sprintf("Activate skill %s?\n%s", msg.SkillName, msg.Description),
+				Type:     agent_domain.QuestionTypeYesNo,
+			},
+		}, m.width)
+		m.activePopup = PopupConfirm
+		go func() {
+			ans := <-respCh
+			msg.ResponseChan <- isYes(ans)
+		}()
+		return m, waitForAgentEvent(m.lastStreamCh)
+
 	case engine.ChatResult:
 		m.isProcessing = false
 		m.loading = false
 		m.messages = append(m.messages, Message{
-			Type:      AgentMsg,
-			Content:   msg.Content,
-			Sender:    "DuckOps",
-			Timestamp: time.Now(),
+			Type:       AgentMsg,
+			Content:    msg.Content,
+			Sender:     "DuckOps",
+			Timestamp:  time.Now(),
+			Checkpoint: uuid.New().String()[:8], // Shorter UUID for cleaner UI
 		})
-		
-		// Update telemetry
 		m.totalUsage.PromptTokens += msg.Usage.PromptTokens
 		m.totalUsage.CompletionTokens += msg.Usage.CompletionTokens
 		m.totalUsage.TotalTokens += msg.Usage.TotalTokens
@@ -196,7 +322,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.scroll = 0
 		m.stayAtBottom = true
-		return m, nil
+		return m.dequeueNext()
 
 	case agentResponseMsg:
 		m.isProcessing = false
@@ -209,9 +335,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Timestamp: time.Now(),
 			})
 		}
-		return m, nil
+		return m.dequeueNext()
 
-	case error: // Catch-all for engine errors in stream
+	case error:
 		m.isProcessing = false
 		m.loading = false
 		m.messages = append(m.messages, Message{
@@ -220,35 +346,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Sender:    "DuckOps",
 			Timestamp: time.Now(),
 		})
-		return m, nil
+		return m.dequeueNext()
 
-	// ── Toast dismiss ───────────────────────────────────────────────
 	case toastDismissMsg:
 		m.toast = nil
 		return m, nil
 
-	// ── Window resize ───────────────────────────────────────────────
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.wrappedCache = nil
-
 		if m.stayAtBottom {
 			m.scroll = 0
 		}
-
-		w := m.width - 6
-		if m.showSidePanel {
-			w -= components.SidePanelWidth
-		}
-		if w < 10 {
-			w = 10
-		}
-		m.textarea.SetWidth(w)
+		m.setTextareaWidth()
 		m.shell, _ = m.shell.Update(msg)
 		return m, nil
 
-	// ── Key events ──────────────────────────────────────────────────
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
@@ -268,7 +382,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// ── Spinner tick ────────────────────────────────────────────────
 	default:
 		if m.loading {
 			var spCmd tea.Cmd
@@ -277,28 +390,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Always update textarea.
 	var taCmd tea.Cmd
 	m.textarea, taCmd = m.textarea.Update(msg)
 	cmds = append(cmds, taCmd)
+	m.syncTextareaHeight()
+	m.syncDiscoveryMode()
 
-	// Keep a fixed height for the textarea to ensure a stable layout
-	m.textarea.SetHeight(3)
+	if m.showMenu && !strings.HasPrefix(m.textarea.Value(), "/") {
+		m.showMenu = false
+	}
 
-	// ── Sync Mode & Search (Works for both Keys and Paste) ────────
+	return m, tea.Batch(cmds...)
+}
+
+// syncDiscoveryMode updates mode and results based on current textarea value.
+func (m *model) syncDiscoveryMode() {
 	val := m.textarea.Value()
 	if strings.HasPrefix(val, "!") {
 		if m.mode != ShellDiscoveryMode {
 			m.mode = ShellDiscoveryMode
 			m.discoveryIndex = 0
 		}
-		query := strings.TrimPrefix(val, "!")
-		m.discoveryResults = m.discovery.Search(query)
+		m.discoveryResults = m.discovery.Search(strings.TrimPrefix(val, "!"))
 		if m.discoveryIndex >= len(m.discoveryResults) {
 			m.discoveryIndex = 0
 		}
 	} else if atQuery := extractAtQuery(val); atQuery != "" {
-		// @ can appear anywhere in the input: "review @file.go" works too
 		if m.mode != FileDiscoveryMode {
 			m.mode = FileDiscoveryMode
 			m.discoveryIndex = 0
@@ -307,48 +424,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.discoveryIndex >= len(m.discoveryResults) {
 			m.discoveryIndex = 0
 		}
-	} else {
-		if m.mode == FileDiscoveryMode || m.mode == ShellDiscoveryMode {
-			m.mode = ChatMode
-			m.discoveryResults = nil
-		}
+	} else if m.mode == FileDiscoveryMode || m.mode == ShellDiscoveryMode {
+		m.mode = ChatMode
+		m.discoveryResults = nil
 	}
-
-	// ── Command Menu Sync ──────────────────────────────────────────
-	if m.showMenu && !strings.HasPrefix(val, "/") {
-		m.showMenu = false
-	}
-
-	return m, tea.Batch(cmds...)
 }
 
 // ── Key handling ────────────────────────────────────────────────────
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// 1. Global Interceptors
+	// Global interceptors
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.isProcessing && m.shell.active {
-			// Interrupt the current shell process
 			if m.shell.cmd != nil && m.shell.cmd.Process != nil {
 				_ = m.shell.cmd.Process.Kill()
 			}
 			m.isProcessing = false
 			m.loading = false
 			m.toast = &Toast{Message: "Process interrupted", Level: ToastWarning}
-			return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return toastDismissMsg{} })
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return toastDismissMsg{} })
 		}
-		return m, tea.Quit
+		if m.isExitPrompt {
+			return m, tea.Quit
+		}
+		m.isExitPrompt = true
+		m.askDialog = components.NewAskUserDialog([]agent_domain.AskUserQuestion{
+			{Header: "Exit", Question: "Are you sure you want to exit DuckOps?", Type: agent_domain.QuestionTypeYesNo},
+		}, m.width)
+		m.activePopup = PopupConfirm
+		return m, nil
+
 	case tea.KeyEnter:
 		input := strings.TrimSpace(m.textarea.Value())
 		if strings.HasPrefix(input, "!") {
 			return m.routeShellCommand(input)
 		}
-		// If shell is active but dead, normal enter should go back to chat
 		if m.shellActive && !m.shell.active && input != "" {
 			m.shellActive = false
 			m.mode = ChatMode
 		}
+
 	case tea.KeyEsc:
 		if m.shellActive {
 			m.shellActive = false
@@ -357,39 +473,41 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// 2. Active View Delegation
+	// Shell active delegation
 	if m.shellActive {
 		if msg.Type == tea.KeyCtrlF {
 			m.shell.focused = !m.shell.focused
 			return m, nil
 		}
-		
 		if m.shell.focused {
 			var cmd tea.Cmd
 			m.shell, cmd = m.shell.Update(msg)
 			return m, cmd
-		} else {
-			switch msg.Type {
-			case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
-				var cmd tea.Cmd
-				m.shell, cmd = m.shell.Update(msg)
-				return m, cmd
-			case tea.KeyEsc:
-				m.shellActive = false
-				m.mode = ChatMode
-				return m, nil
-			}
+		}
+		switch msg.Type {
+		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+			var cmd tea.Cmd
+			m.shell, cmd = m.shell.Update(msg)
+			return m, cmd
+		case tea.KeyEsc:
+			m.shellActive = false
+			m.mode = ChatMode
+			return m, nil
 		}
 	}
 
+	// Popup delegation
 	if m.activePopup != PopupNone {
+		if m.activePopup == PopupConfirm && m.askDialog != nil {
+			return m.handleConfirmKey(msg)
+		}
 		if msg.Type == tea.KeyEsc {
 			m.activePopup = PopupNone
 		}
 		return m, nil
 	}
 
-	// ── Shell/File Discovery Mode ────────────────────────────────────
+	// Discovery navigation
 	if m.mode == ShellDiscoveryMode || m.mode == FileDiscoveryMode {
 		switch msg.Type {
 		case tea.KeyUp:
@@ -406,32 +524,26 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.discoveryResults) > 0 {
 				selected := m.discoveryResults[m.discoveryIndex].Name
 				current := m.textarea.Value()
-
 				if m.mode == FileDiscoveryMode {
-					// Replace only the @query token, preserve rest of the input
-					atIdx := strings.LastIndex(current, "@")
-					if atIdx >= 0 {
-						before := current[:atIdx]
-						m.textarea.SetValue(before + "@" + selected + " ")
+					if atIdx := strings.LastIndex(current, "@"); atIdx >= 0 {
+						m.textarea.SetValue(current[:atIdx] + "@" + selected + " ")
 					} else {
 						m.textarea.SetValue("@" + selected + " ")
 					}
 				} else {
-					// Shell (!command) mode — replace whole input
 					m.textarea.SetValue("!" + selected + " ")
 				}
 				m.textarea.CursorEnd()
-				return m, nil
 			}
+			return m, nil
 		}
 	}
 
-	// ── Menu mode ───────────────────────────────────────────────────
 	if m.showMenu {
 		return m.handleMenuKey(msg)
 	}
 
-	// ── Processing — allow scroll, but don't block input ──────────────
+	// Processing mode — allow scroll + queue input
 	if m.isProcessing {
 		switch msg.Type {
 		case tea.KeyUp:
@@ -447,25 +559,32 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case tea.KeyEnter:
-			// Prevent sending a new message while the agent is already processing one
-			m.toast = &Toast{Message: "Agent is currently processing a request", Level: ToastWarning}
-			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return toastDismissMsg{} })
+			if input := strings.TrimSpace(m.textarea.Value()); input != "" {
+				m.queuedMessages = append(m.queuedMessages, input)
+				m.messages = append(m.messages, Message{
+					Type:      UserMsg,
+					Content:   input + " (Queued...)",
+					Sender:    "You",
+					Timestamp: time.Now(),
+				})
+				m.resetTextarea()
+				m.scroll = 0
+				m.stayAtBottom = true
+			}
+			return m, nil
 		}
-		// We purposefully DO NOT return here for other keys, 
-		// allowing them to fall through to the textarea update at the end!
+		// Other keys fall through to textarea
 	}
 
-	// ── Normal mode keybindings ─────────────────────────────────────
+	// Normal mode
 	switch msg.Type {
 	case tea.KeyEnter:
 		if msg.Alt {
-			// Alt+Enter: Insert a newline instead of sending
 			var taCmd tea.Cmd
 			m.textarea, taCmd = m.textarea.Update(msg)
 			return m, taCmd
 		}
-		content := m.textarea.Value()
-		if content != "" {
+		if content := m.textarea.Value(); content != "" {
 			if m.shellActive {
 				m.shellActive = false
 				m.mode = ChatMode
@@ -476,17 +595,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Sender:    "You",
 				Timestamp: time.Now(),
 			})
-			m.textarea.Reset()
-			m.textarea.SetHeight(1)
+			m.resetTextarea()
 			m.scroll = 0
 			m.stayAtBottom = true
 
-			// Intercept specific tool list query before hitting Agent processing state
-			query := strings.TrimSpace(strings.ToLower(content))
-			if query == "list all tools" || query == "/tools" {
+			switch strings.TrimSpace(strings.ToLower(content)) {
+			case "list all tools", "/tools":
 				return m.showToolsTable()
-			}
-			if query == "list all skills" || query == "/skills" {
+			case "list all skills", "/skills":
 				return m.showSkillsTable()
 			}
 
@@ -498,21 +614,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlB:
 		m.showSidePanel = !m.showSidePanel
-		// Readjust textarea width
-		w := m.width - 6
-		if m.showSidePanel {
-			w -= components.SidePanelWidth
-		}
-		if w < 10 {
-			w = 10
-		}
-		m.textarea.SetWidth(w)
+		m.setTextareaWidth()
 		return m, nil
 
 	case tea.KeyEsc:
-		if m.showMenu {
-			m.showMenu = false
-		}
+		m.showMenu = false
 		return m, nil
 
 	case tea.KeyCtrlK:
@@ -534,19 +640,87 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyRunes:
-		if len(msg.Runes) == 1 && msg.Runes[0] == '/' {
-			if m.textarea.Value() == "" {
-				m.showMenu = true
-				m.menuSelection = 0
-			}
+		if len(msg.Runes) == 1 && msg.Runes[0] == '/' && m.textarea.Value() == "" {
+			m.showMenu = true
+			m.menuSelection = 0
 		}
 	}
 
-	// Forward to textarea.
 	var taCmd tea.Cmd
 	m.textarea, taCmd = m.textarea.Update(msg)
-
+	m.syncTextareaHeight()
 	return m, taCmd
+}
+
+// handleConfirmKey handles keyboard input while an ask-dialog popup is active.
+func (m model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyUp:
+		m.askDialog.MoveUp()
+	case tea.KeyDown:
+		m.askDialog.MoveDown()
+	case tea.KeyTab:
+		m.askDialog.NextQuestion()
+	case tea.KeyShiftTab:
+		m.askDialog.PrevQuestion()
+	case tea.KeySpace:
+		m.askDialog.ToggleMultiSelect()
+	case tea.KeyBackspace, tea.KeyDelete:
+		m.askDialog.Backspace()
+	case tea.KeyRunes:
+		for _, r := range msg.Runes {
+			m.askDialog.TypeChar(r)
+		}
+
+	case tea.KeyEsc:
+		if m.askChan != nil {
+			m.askChan <- agent_domain.AskUserResponse{Cancelled: true}
+		}
+		if m.isToolApproval {
+			m.resumeSession(false)
+		}
+		m.dismissPopup()
+		m.isToolApproval = false
+		if m.isExitPrompt {
+			m.isExitPrompt = false
+			return m, nil
+		}
+		return m, waitForAgentEvent(m.lastStreamCh)
+
+	case tea.KeyEnter:
+		ans := m.askDialog.Collect()
+		if m.isExitPrompt {
+			if ans[0] == "yes" || ans[0] == "Yes" {
+				return m, tea.Quit
+			}
+			m.dismissPopup()
+			m.isExitPrompt = false
+			return m, nil
+		}
+		if m.isToolApproval {
+			m.resumeSession(ans[0] == "yes" || ans[0] == "Yes")
+			m.askDialog = nil
+			m.activePopup = PopupNone
+			m.isToolApproval = false
+			return m, waitForAgentEvent(m.lastStreamCh)
+		}
+		if m.askChan != nil {
+			m.askChan <- agent_domain.AskUserResponse{Answers: ans}
+		}
+		m.dismissPopup()
+		return m, waitForAgentEvent(m.lastStreamCh)
+	}
+	return m, nil
+}
+
+// resumeSession approves or rejects a tool-approval session.
+func (m *model) resumeSession(approved bool) {
+	if m.sessionManager != nil && m.activeSessionID != "" {
+		_ = m.sessionManager.ResumeSession(m.activeSessionID, subagent.ResumeDecision{
+			ApproveAll: approved,
+			RejectAll:  !approved,
+		})
+	}
 }
 
 // ── Menu key handling ───────────────────────────────────────────────
@@ -558,19 +732,16 @@ func (m model) handleMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		m.showMenu = false
 		return m, nil
-
 	case tea.KeyUp:
 		if m.menuSelection > 0 {
 			m.menuSelection--
 		}
 		return m, nil
-
 	case tea.KeyDown:
 		if m.menuSelection < len(items)-1 {
 			m.menuSelection++
 		}
 		return m, nil
-
 	case tea.KeyEnter:
 		if len(items) == 0 {
 			m.showMenu = false
@@ -578,85 +749,50 @@ func (m model) handleMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		selectedCmd := items[m.menuSelection].Command
 		m.showMenu = false
-		m.textarea.Reset()
-		m.textarea.SetHeight(1)
-
-		// Handle slash commands locally before hitting the agent
-		switch selectedCmd {
-		case "/clear":
-			m.messages = nil
-			return m, nil
-
-		case "/help":
-			m.messages = append(m.messages, Message{
-				Type:      UserMsg,
-				Content:   selectedCmd,
-				Sender:    "You",
-				Timestamp: time.Now(),
-			})
-			m.messages = append(m.messages, Message{
-				Type:      AgentMsg,
-				Content:   helpSlashContent(),
-				Sender:    "DuckOps",
-				Timestamp: time.Now(),
-			})
-			return m, nil
-
-		case "/status":
-			m.messages = append(m.messages, Message{
-				Type:      UserMsg,
-				Content:   selectedCmd,
-				Sender:    "You",
-				Timestamp: time.Now(),
-			})
-			m.isProcessing = true
-			m.loading = true
-			return m, tea.Batch(m.runAgent("What is the current system status? Check Docker availability and list any active sessions."), m.spinner.Tick)
-
-		case "/scan":
-			m.messages = append(m.messages, Message{
-				Type:      UserMsg,
-				Content:   selectedCmd,
-				Sender:    "You",
-				Timestamp: time.Now(),
-			})
-			m.isProcessing = true
-			m.loading = true
-			return m, tea.Batch(m.runAgent("Run a full security scan on the current project directory."), m.spinner.Tick)
-
-		case "/vuln":
-			m.messages = append(m.messages, Message{
-				Type:      UserMsg,
-				Content:   selectedCmd,
-				Sender:    "You",
-				Timestamp: time.Now(),
-			})
-			m.isProcessing = true
-			m.loading = true
-			return m, tea.Batch(m.runAgent("Show me all known vulnerabilities and security findings for this project."), m.spinner.Tick)
-
-		case "/logout":
-			return m, tea.Quit
-
-		default:
-			// Unknown slash command → send to agent as natural language
-			m.messages = append(m.messages, Message{
-				Type:      UserMsg,
-				Content:   selectedCmd,
-				Sender:    "You",
-				Timestamp: time.Now(),
-			})
-			m.isProcessing = true
-			m.loading = true
-			return m, tea.Batch(m.runAgent(selectedCmd), m.spinner.Tick)
-		}
+		m.resetTextarea()
+		return m.execMenuCommand(selectedCmd)
 	}
 
-	// Forward other keys (typing) to textarea
 	var taCmd tea.Cmd
 	m.textarea, taCmd = m.textarea.Update(msg)
-
+	m.syncTextareaHeight()
 	return m, taCmd
+}
+
+// execMenuCommand dispatches a slash command chosen from the menu.
+func (m model) execMenuCommand(cmd string) (tea.Model, tea.Cmd) {
+	switch cmd {
+	case "/clear":
+		m.messages = nil
+		return m, nil
+	case "/tools":
+		return m.showToolsTable()
+	case "/skills":
+		return m.showSkillsTable()
+	case "/help":
+		m.messages = append(m.messages,
+			Message{Type: UserMsg, Content: cmd, Sender: "You", Timestamp: time.Now()},
+			Message{Type: AgentMsg, Content: helpSlashContent(), Sender: "DuckOps", Timestamp: time.Now()},
+		)
+		return m, nil
+	case "/exit":
+		return m, tea.Quit
+	default:
+		// /status, /scan, /vuln, or any unknown slash command → agent
+		agentPrompts := map[string]string{
+			"/status": "What is the current system status? Check Docker availability and list any active sessions.",
+			"/scan":   "Run a full security scan on the current project directory.",
+			"/vuln":   "Show me all known vulnerabilities and security findings for this project.",
+		}
+		prompt, ok := agentPrompts[cmd]
+		if !ok {
+			prompt = cmd
+		}
+		m.messages = append(m.messages, Message{Type: UserMsg, Content: cmd, Sender: "You", Timestamp: time.Now()})
+		m.isProcessing = true
+		m.loading = true
+		return m, tea.Batch(m.runAgent(prompt), m.spinner.Tick)
+	}
 }
 
 // ── Shell Routing ──────────────────────────────────────────────────
@@ -666,129 +802,186 @@ func (m *model) routeShellCommand(input string) (tea.Model, tea.Cmd) {
 	if rawCmd == "" {
 		return m, nil
 	}
-
 	parts, err := shlex.Split(rawCmd)
 	if err != nil {
 		m.toast = &Toast{Message: "Shell parse error: " + err.Error(), Level: ToastError}
-		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return toastDismissMsg{} })
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return toastDismissMsg{} })
 	}
 	if len(parts) == 0 {
 		return m, nil
 	}
 
-	command := parts[0]
-	args := parts[1:]
-
-	// 1. Add User Command to Chat
-	m.messages = append(m.messages, Message{
-		Type:      UserMsg,
-		Content:   input,
-		Sender:    "You",
-		Timestamp: time.Now(),
-	})
-
-	// 2. Add Placeholder Response from DuckOps with a nice Header
-	header := " **Shell Mode**\n"
-	m.messages = append(m.messages, Message{
-		Type:      AgentMsg,
-		Content:   header + "```shell\n```",
-		Sender:    "DuckOps",
-		Timestamp: time.Now(),
-	})
-
-	m.textarea.Reset()
-	m.textarea.SetHeight(1)
+	m.messages = append(m.messages,
+		Message{Type: UserMsg, Content: input, Sender: "You", Timestamp: time.Now()},
+		Message{Type: AgentMsg, Content: " **Shell Mode**\n```shell\n```", Sender: "DuckOps", Timestamp: time.Now()},
+	)
+	m.resetTextarea()
 	m.isProcessing = true
 	m.loading = true
 	m.scroll = 0
 	m.stayAtBottom = true
-
-	// Stay in ChatMode
 	m.mode = ChatMode
 	m.shellActive = false
 
-	return m, m.shell.RunCommand(command, args)
+	return m, m.shell.RunCommand(parts[0], parts[1:])
 }
 
-// ── Tools Display ──────────────────────────────────────────────────
+// ── Tools / Skills Display ─────────────────────────────────────────
 
 func (m *model) showToolsTable() (tea.Model, tea.Cmd) {
-	toolsHeaders := []string{"#", "Tool", "Description"}
-	
-	// Mimic exactly what the user requested ("File & Code Operations" then "Command Execution")
-	toolsData := [][]string{
-		{"1", "view_file", "Read files/directories, supports glob, line ranges, tree view"},
-		{"2", "write_to_file", "Create or overwrite files with code content (local machine)"},
-		{"3", "multi_replace_file_content", "Find & replace exact text in files robustly"},
-		{"4", "grep_search", "Deep grep search across the codebase"},
-		{"5", "list_dir", "List files and subdirectories structurally"},
-		{"6", "run_command", "Execute shell commands securely in DuckOps workspace"},
-		{"7", "mcp_servers", "External tool servers (GitHub, filesystem, scanners…)"},
-		{"8", "sast_scanner", "Runs targeted SAST (Semgrep, Trivy, Gosec) against codebase"},
+	var rows [][]string
+	for i, t := range m.engine.GetAvailableTools() {
+		rows = append(rows, []string{fmt.Sprintf("%d", i+1), t.Name, t.Description})
 	}
-
 	m.messages = append(m.messages, Message{
 		Type:         AgentMsg,
 		Content:      "Here's the complete list of tools available to me:\n\n**File, Execution & Security Operations**",
 		Sender:       "DuckOps",
 		Timestamp:    time.Now(),
-		TableHeaders: toolsHeaders,
-		TableData:    toolsData,
+		TableHeaders: []string{"#", "Tool", "Description"},
+		TableData:    rows,
 	})
-
 	m.scroll = 0
 	m.stayAtBottom = true
-
 	return m, nil
 }
 
-// ── Skills Display ──────────────────────────────────────────────────
-
 func (m *model) showSkillsTable() (tea.Model, tea.Cmd) {
-	skillsHeaders := []string{"Skill Name", "Focus Area / Description"}
-	
-	var skillsData [][]string
+	var rows [][]string
 	if m.skillRegistry != nil {
-		available := m.skillRegistry.ListSkills()
-		for _, s := range available {
-			skillsData = append(skillsData, []string{s.Name, s.Description})
+		for _, s := range m.skillRegistry.ListSkills() {
+			rows = append(rows, []string{s.Name, s.Description})
 		}
 	} else {
-		skillsData = [][]string{{"Error", "Skill registry not initialized."}}
+		rows = [][]string{{"Error", "Skill registry not initialized."}}
 	}
-
 	m.messages = append(m.messages, Message{
 		Type:         AgentMsg,
 		Content:      "Here's the complete list of Knowledge Skills loaded in my memory. I can dynamically fetch their full content when needed:\n\n**Available Agent Skills**",
 		Sender:       "DuckOps",
 		Timestamp:    time.Now(),
-		TableHeaders: skillsHeaders,
-		TableData:    skillsData,
+		TableHeaders: []string{"Skill Name", "Focus Area / Description"},
+		TableData:    rows,
 	})
-
 	m.scroll = 0
 	m.stayAtBottom = true
-
 	return m, nil
 }
 
-// extractAtQuery finds the last @token in the input and returns the query after @.
-// Returns "" if no active @mention is found.
-// e.g. "review @main" → "main",  "hello world" → ""
+// ── Utilities ───────────────────────────────────────────────────────
+
+// extractAtQuery returns the query string after the last '@' token if it has no trailing space.
 func extractAtQuery(input string) string {
 	atIdx := strings.LastIndex(input, "@")
 	if atIdx < 0 {
 		return ""
 	}
 	after := input[atIdx+1:]
-	// Must be contiguous (no space after @)
 	if strings.Contains(after, " ") {
 		return ""
 	}
 	return after
 }
 
-// helpSlashContent returns the help content for /help slash command.
+// isYes reports whether an AskUserResponse represents an affirmative answer.
+func isYes(ans agent_domain.AskUserResponse) bool {
+	if ans.Cancelled || len(ans.Answers) == 0 {
+		return false
+	}
+	v := strings.ToLower(ans.Answers[0])
+	return v == "yes" || v == "y"
+}
+
+// dequeueNext starts processing the next queued message, if any.
+func (m model) dequeueNext() (tea.Model, tea.Cmd) {
+	if len(m.queuedMessages) == 0 {
+		return m, nil
+	}
+	next := m.queuedMessages[0]
+	m.queuedMessages = m.queuedMessages[1:]
+	m.isProcessing = true
+	m.loading = true
+	m.scroll = 0
+	m.stayAtBottom = true
+
+	if strings.HasPrefix(next, "!") {
+		return m.routeShellCommand(next)
+	}
+	return m, tea.Batch(m.runAgent(next), m.spinner.Tick)
+}
+
+// appendAggregatedThought appends or merges a thought line into the message list.
+func appendAggregatedThought(m model, content string) model {
+	text := "- " + strings.ReplaceAll(strings.TrimSpace(content), "\n", "\n  ")
+	if n := len(m.messages); n > 0 {
+		last := &m.messages[n-1]
+		if last.Type == ThoughtMsg || last.Type == LearningMsg || last.Type == ReflectionMsg {
+			last.Type = ThoughtMsg
+			last.Content += "\n" + text
+			m.scroll = 0
+			m.stayAtBottom = true
+			return m
+		}
+	}
+	m.messages = append(m.messages, Message{
+		Type:      ThoughtMsg,
+		Content:   text,
+		Sender:    "DuckOps",
+		Timestamp: time.Now(),
+	})
+	m.scroll = 0
+	m.stayAtBottom = true
+	return m
+}
+
+// appendStreamedThought appends a raw streamed chunk without bullet formatting.
+func appendStreamedThought(m model, chunk string) model {
+	if n := len(m.messages); n > 0 {
+		last := &m.messages[n-1]
+		if last.Type == ThoughtMsg || last.Type == LearningMsg || last.Type == ReflectionMsg {
+			last.Type = ThoughtMsg
+			last.Content += chunk
+			m.scroll = 0
+			m.stayAtBottom = true
+			return m
+		}
+	}
+	m.messages = append(m.messages, Message{
+		Type:      ThoughtMsg,
+		Content:   chunk,
+		Sender:    "DuckOps",
+		Timestamp: time.Now(),
+	})
+	m.scroll = 0
+	m.stayAtBottom = true
+	return m
+}
+
+// calculateTextareaHeight returns the number of visual lines the textarea content occupies.
+func calculateTextareaHeight(ta textarea.Model) int {
+	w := ta.Width()
+	if w <= 0 {
+		w = 80
+	}
+	total := 0
+	for _, line := range strings.Split(ta.Value(), "\n") {
+		lw := lipgloss.Width(line)
+		if lw == 0 {
+			total++
+			continue
+		}
+		total += lw / w
+		if lw%w != 0 {
+			total++
+		}
+	}
+	if total < 1 {
+		return 1
+	}
+	return total
+}
+
+// helpSlashContent returns the markdown help text for /help.
 func helpSlashContent() string {
 	return `## 🦆 DuckOps Commands
 
@@ -831,30 +1024,3 @@ Type ` + "`!`" + ` followed by any shell command to run it directly.
 | ` + "`↑ / ↓`" + ` | Scroll messages |
 `
 }
-
-func appendAggregatedThought(m model, content string) model {
-	text := "- " + strings.ReplaceAll(strings.TrimSpace(content), "\n", "\n  ")
-	if len(m.messages) > 0 {
-		lastIdx := len(m.messages) - 1
-		lastType := m.messages[lastIdx].Type
-		if lastType == ThoughtMsg || lastType == LearningMsg || lastType == ReflectionMsg {
-			m.messages[lastIdx].Type = ThoughtMsg
-			m.messages[lastIdx].Content += "\n" + text
-			m.scroll = 0
-			m.stayAtBottom = true
-			return m
-		}
-	}
-
-	m.messages = append(m.messages, Message{
-		Type:      ThoughtMsg,
-		Content:   text,
-		Sender:    "DuckOps",
-		Timestamp: time.Now(),
-	})
-	m.scroll = 0
-	m.stayAtBottom = true
-	return m
-}
-
-

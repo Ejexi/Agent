@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/SecDuckOps/agent/internal/domain"
 )
@@ -36,4 +38,34 @@ func DefaultParseParams[P any](input map[string]interface{}) (P, error) {
 	}
 	err = json.Unmarshal(data, &params)
 	return params, err
+}
+
+// GenerateSchemaParams dynamically creates a schema map reading `json` and `desc` tags from a struct.
+func GenerateSchemaParams(v interface{}) map[string]string {
+	params := make(map[string]string)
+	val := reflect.TypeOf(v)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return params
+	}
+
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		jsonTag := field.Tag.Get("json")
+		if jsonTag == "" || jsonTag == "-" {
+			continue
+		}
+		
+		name := strings.Split(jsonTag, ",")[0]
+		
+		desc := field.Tag.Get("desc")
+		if desc != "" {
+			params[name] = desc
+		} else {
+			params[name] = field.Type.String() // fallback
+		}
+	}
+	return params
 }

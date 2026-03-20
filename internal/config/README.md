@@ -1,39 +1,12 @@
-# config/
+# DuckOps Agent Configuration (`agent/internal/config`)
 
-Configuration management for the DuckOps Agent.
+## Purpose
+The `config` directory is responsible for defining, parsing, and managing the configuration of the DuckOps Agent. It handles reading settings from the environment, configuration files (e.g., typically `config.toml` or similar), and CLI arguments.
+
+## Architectural Rules
+- **Centralized Configuration:** This package should be the single source of truth for configuration structures. Other modules should depend on these structures rather than parsing environment variables or files directly.
+- **Immutability:** Once loaded, configuration should ideally be treated as read-only throughout the application lifecycle.
+- **Dependency Injection:** The loaded configuration object (or relevant parts of it) should be injected into the services and adapters that require it, avoiding global state where possible.
 
 ## Files
-
-| File                | Description                                                             |
-| ------------------- | ----------------------------------------------------------------------- |
-| `duckops_config.go` | TOML config structures, loading, and `~/.duckops/` directory management |
-
-## Configuration Location
-
-```
-~/.duckops/
-├── config.toml    # Main configuration file
-└── data/
-    └── local.db   # Local SQLite database
-```
-
-## Key Types
-
-| Type            | Description                                                |
-| --------------- | ---------------------------------------------------------- |
-| `DuckOpsConfig` | Top-level config loaded from `config.toml`                 |
-| `Profile`       | Named configuration profile (providers, security settings) |
-| `Provider`      | LLM provider config (type, API key, model, base URL)       |
-| `WardenConfig`  | Sandbox/isolation and mTLS settings                        |
-| `SecretsConfig` | Secret substitution settings                               |
-| `AuditConfig`   | Session audit logging settings                             |
-| `Settings`      | Global settings (machine name, agent mode, server addr)    |
-
-## Functions
-
-| Function             | Description                                                         |
-| -------------------- | ------------------------------------------------------------------- |
-| `LoadTOML()`         | Loads config from `~/.duckops/config.toml`, auto-creates if missing |
-| `EnsureDuckOpsDir()` | Creates `~/.duckops/` and subdirectories                            |
-| `GetProfile(name)`   | Returns named profile, defaults to `"default"`                      |
-| `DatabasePath()`     | Returns path to `~/.duckops/data/local.db`                          |
+- `duckops_config.go`: Defines the core configuration structures (e.g., `DuckOpsConfig`, potentially integrating global options, server settings, and MCP connection settings) and the logic required to populate them from external sources.

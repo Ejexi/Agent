@@ -156,7 +156,7 @@ func RenderImageToHalfBlocks(path string, width int) (string, error) {
 
 			// Calculate a horizontal gradient ratio
 			gradRatio := float64(x) / float64(width)
-			
+
 			// OpenCode transition: smooth blend from grey to white around the midpoint
 			color := interpolateAdaptive(greyCol, whiteCol, gradRatio)
 

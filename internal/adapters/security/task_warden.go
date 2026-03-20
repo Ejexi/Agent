@@ -2,13 +2,13 @@ package security
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/ports"
 	shared_ports "github.com/SecDuckOps/shared/ports"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // TaskWardenAdapter implements the SecurityGatePort.
@@ -43,7 +43,7 @@ func (g *TaskWardenAdapter) Evaluate(ctx context.Context, task domain.OSTask) er
 	for _, arg := range task.Args {
 		for _, blocked := range g.blocklist {
 			if strings.Contains(arg, blocked) {
-				return fmt.Errorf("argument contains blocked shell operator %q", blocked)
+				return types.Newf(types.ErrCodeInvalidInput, "argument contains blocked shell operator %q", blocked)
 			}
 		}
 	}
@@ -70,7 +70,7 @@ func (g *TaskWardenAdapter) Evaluate(ctx context.Context, task domain.OSTask) er
 
 		decision, err := g.warden.EvaluateExecution(ctx, req)
 		if err != nil {
-			return fmt.Errorf("warden policy evaluation failed: %w", err)
+			return types.Wrapf(err, types.ErrCodeInternal, "warden policy evaluation failed")
 		}
 
 		if !decision.Allowed {
@@ -87,7 +87,7 @@ func (g *TaskWardenAdapter) Evaluate(ctx context.Context, task domain.OSTask) er
 				)
 			}
 
-			return fmt.Errorf("execution denied: %s (policy_id: %s)", reason, decision.PolicyID)
+			return types.Newf(types.ErrCodePermissionDenied, "execution denied: %s (policy_id: %s)", reason, decision.PolicyID)
 		}
 	}
 

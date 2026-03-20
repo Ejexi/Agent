@@ -2,13 +2,13 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/SecDuckOps/agent/internal/adapters/configsync"
 	"github.com/SecDuckOps/agent/internal/adapters/events"
 	"github.com/SecDuckOps/agent/internal/adapters/executor"
+	hooks_adapter "github.com/SecDuckOps/agent/internal/adapters/hooks"
 	mcp_adapter "github.com/SecDuckOps/agent/internal/adapters/mcp"
 	checkpoint_adapter "github.com/SecDuckOps/agent/internal/adapters/checkpoint"
 	"github.com/SecDuckOps/agent/internal/adapters/security"
@@ -21,6 +21,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/config"
 	mcp_domain "github.com/SecDuckOps/agent/internal/domain/mcp"
 	domain_security "github.com/SecDuckOps/agent/internal/domain/security"
+	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	"github.com/SecDuckOps/agent/internal/ports"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/chat"
@@ -31,6 +32,9 @@ import (
 	"github.com/SecDuckOps/agent/internal/tools/implementations/search"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/notes"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/reporting"
+	ask_user_tool "github.com/SecDuckOps/agent/internal/tools/implementations/ask_user"
+	plan_tools "github.com/SecDuckOps/agent/internal/tools/implementations/plan"
+	web_fetch_tool "github.com/SecDuckOps/agent/internal/tools/implementations/web_fetch"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/skills"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/subagent"
 	"github.com/SecDuckOps/agent/internal/tools/implementations/terminal"
@@ -47,6 +51,7 @@ import (
 	"github.com/SecDuckOps/shared/logger"
 	shared_ports "github.com/SecDuckOps/shared/ports"
 	scanner_ports "github.com/SecDuckOps/shared/scanner/ports"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // App holds the initialized application components.
@@ -75,7 +80,7 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 	appLogger, err := logger.New("duckops-agent", "info", logPath)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to initialize logger: %w", err)
+		return nil, types.Wrapf(err, types.ErrCodeInternal, "failed to initialize logger")
 	}
 
 	eventBus := events.NewInMemoryEventBus(appLogger)
@@ -84,7 +89,7 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 	profile, ok := tomlCfg.GetProfile("default")
 	if !ok {
 		cancel()
-		return nil, fmt.Errorf("no 'default' profile found in config.toml")
+		return nil, types.New(types.ErrCodeNotFound, "no 'default' profile found in config.toml")
 	}
 
 	cwd, _ := os.Getwd()
@@ -131,7 +136,7 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 		return nil, err
 	}
 
-	// ── Warden (Cedar policy evaluator — KEEP for shell/fs policy) ───────────
+	// ── Warden (Cedar policy evaluator + mTLS) ───────────────────────────────
 	useDefaultDeny := true
 	if profile.Warden != nil {
 		useDefaultDeny = profile.Warden.DefaultDeny
@@ -171,7 +176,7 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 	k := kernel.New(deps)
 	if k == nil {
 		cancel()
-		return nil, fmt.Errorf("kernel initialization failed")
+		return nil, types.New(types.ErrCodeInternal, "kernel initialization failed")
 	}
 
 	bridge := &sa.KernelBridge{
@@ -228,13 +233,13 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 		appLogger.Info(ctx, "Scanner service: not configured — security scans disabled (add [[mcp.servers]] name='scanner')")
 	}
 
-	masterAgent := agent.NewMasterAgent(scannerSvc, llmRegistry.Default(), appLogger)
+	masterAgent := agent.NewMasterAgent(scannerSvc, llmRegistry.Default(), appLogger, buildHookRunner(tomlCfg.Hooks, appLogger), eventBus)
 	reportAgent := agent.NewReportAgent(nil, appLogger)
 	duckOpsAgent := agent.NewDuckOpsAgent(masterAgent, reportAgent, appLogger)
 
 	// ── Register tools ───────────────────────────────────────────────────────
 	skillRegistry, err := registerTools(ctx, toolRegistry, deps, tracker, bridge,
-		capabilityRegistry, profile, appLogger, mcpClient)
+		capabilityRegistry, profile, appLogger, mcpClient, tomlCfg.Hooks)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -281,7 +286,7 @@ func buildLLMRegistry(profile config.Profile, appLogger shared_ports.Logger) (ll
 	}
 	llmRegistry, err := llm_application.NewLLMRegistry(sharedCfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize LLM registry: %w", err)
+		return nil, types.Wrapf(err, types.ErrCodeInternal, "failed to initialize LLM registry")
 	}
 	for name, prov := range profile.Providers {
 		if (name == "gemini" || prov.Type == "gemini") && prov.APIKey != "" {
@@ -306,12 +311,14 @@ func registerTools(
 	profile config.Profile,
 	appLogger shared_ports.Logger,
 	mcpClient ports.MCPClientPort,
+	tomlHooks config.HooksConfig,
 ) (domain_skills.Registry, error) {
 
 	osTranslator := translator.NewOSTranslatorAdapter("")
 	aiReviewer := security.NewAIReviewer(deps.LLM, profile.Provider, appLogger)
 	taskWarden := security.NewTaskWardenAdapter(deps.Warden, osTranslator, appLogger)
-	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, deps.ShellExecution, aiReviewer, appLogger)
+	hookRunner := buildHookRunner(tomlHooks, appLogger)
+	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, deps.ShellExecution, aiReviewer, appLogger, hookRunner)
 	fsGate := filesystem.NewWardenGate(deps.Warden, appLogger)
 
 	tools := []struct {
@@ -325,6 +332,9 @@ func registerTools(
 		{"terminal", toolRegistry.RegisterTool(ctx, terminal.NewTerminalTool(taskDispatcher))},
 		{"notes", toolRegistry.RegisterTool(ctx, notes.NewNotesTool())},
 		{"todo", toolRegistry.RegisterTool(ctx, todo.NewTodoTool())},
+		{"ask_user", toolRegistry.RegisterTool(ctx, ask_user_tool.New())},
+		{"enter_plan_mode", toolRegistry.RegisterTool(ctx, plan_tools.NewEnterPlanMode())},
+		{"exit_plan_mode", toolRegistry.RegisterTool(ctx, plan_tools.NewExitPlanMode())},
 		{"file_edit", toolRegistry.RegisterTool(ctx, file_ops.NewFileOpsTool(fsGate))},
 		{"generate_report", toolRegistry.RegisterTool(ctx, reporting.NewReportingTool(deps.LLM))},
 		// MCP tools — let the LLM call any connected MCP server
@@ -332,6 +342,7 @@ func registerTools(
 		{"mcp_list", toolRegistry.RegisterTool(ctx, mcp_tool.NewMCPListTool(mcpClient))},
 		{"grep_search", toolRegistry.RegisterTool(ctx, search.NewGrepSearchTool())},
 		{"web_search", toolRegistry.RegisterTool(ctx, web_search.NewWebSearchTool())},
+		{"web_fetch", toolRegistry.RegisterTool(ctx, web_fetch_tool.New())},
 	}
 
 	skillRegistry, err := domain_skills.NewEmbeddedRegistry()
@@ -346,8 +357,57 @@ func registerTools(
 
 	for _, t := range tools {
 		if t.err != nil {
-			return nil, fmt.Errorf("tool registration failed for %s: %w", t.name, t.err)
+			return nil, types.Wrapf(t.err, types.ErrCodeInternal, "tool registration failed for %s", t.name)
 		}
 	}
 	return skillRegistry, nil
+}
+
+// buildHookRunner constructs a FileSystemHookRunner from the TOML config.
+// Converts config.HooksConfig entries → domain.HookConfig entries and resolves
+// the hooks directory (defaults to ~/.duckops/hooks).
+func buildHookRunner(cfg config.HooksConfig, logger shared_ports.Logger) *hooks_adapter.FileSystemHookRunner {
+	configHooks := make(map[domain.HookEventType][]domain.HookConfig)
+
+	convert := func(event domain.HookEventType, entries []config.HookEntry) {
+		for _, e := range entries {
+			enabled := true
+			if e.Enabled != nil {
+				enabled = *e.Enabled
+			}
+			if !enabled {
+				continue
+			}
+			configHooks[event] = append(configHooks[event], domain.HookConfig{
+				Name:      e.Name,
+				Matcher:   e.Matcher,
+				Command:   e.Command,
+				TimeoutMs: e.TimeoutMs,
+				Enabled:   enabled,
+			})
+		}
+	}
+
+	convert(domain.HookBeforeTool, cfg.BeforeTool)
+	convert(domain.HookAfterTool, cfg.AfterTool)
+	convert(domain.HookBeforeScan, cfg.BeforeScan)
+	convert(domain.HookAfterScan, cfg.AfterScan)
+	convert(domain.HookSessionStart, cfg.SessionStart)
+	convert(domain.HookSessionEnd, cfg.SessionEnd)
+
+	// Resolve hooks directory
+	hooksDir := cfg.Dir
+	if hooksDir == "" {
+		if dir, err := config.DuckOpsDir(); err == nil {
+			hooksDir = filepath.Join(dir, "hooks")
+		}
+	}
+	// Expand ~ manually (os.ExpandEnv doesn't handle ~)
+	if len(hooksDir) >= 2 && hooksDir[:2] == "~/" {
+		if home, err := os.UserHomeDir(); err == nil {
+			hooksDir = filepath.Join(home, hooksDir[2:])
+		}
+	}
+
+	return hooks_adapter.New(configHooks, hooksDir, logger)
 }

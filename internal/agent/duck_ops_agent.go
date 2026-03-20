@@ -14,10 +14,11 @@ import (
 // DuckOpsAgent is the conversational CLI agent.
 // It owns the REPL loop and bridges natural language to MasterAgent.
 type DuckOpsAgent struct {
-	master *MasterAgent
-	report *ReportAgent
-	logger shared_ports.Logger
-	cwd    string
+	master        *MasterAgent
+	report        *ReportAgent
+	logger        shared_ports.Logger
+	cwd           string
+	defaultFormat string // "text" | "json" | "sarif" — set by --format flag
 }
 
 // NewDuckOpsAgent creates a ready-to-run conversational agent.
@@ -29,6 +30,12 @@ func NewDuckOpsAgent(master *MasterAgent, report *ReportAgent, logger shared_por
 		logger: logger,
 		cwd:    cwd,
 	}
+}
+
+// WithFormat sets the default output format (used by --format flag).
+func (a *DuckOpsAgent) WithFormat(format string) *DuckOpsAgent {
+	a.defaultFormat = format
+	return a
 }
 
 // Run starts the conversational REPL. Blocks until user exits.
@@ -79,11 +86,23 @@ func (a *DuckOpsAgent) HandleNaturalLanguage(ctx context.Context, input string) 
 		if err != nil {
 			return "", err
 		}
-		if intent.OutputFmt == "json" {
+		// CLI --format flag takes precedence over intent-parsed format
+		outputFmt := intent.OutputFmt
+		if outputFmt == "" {
+			outputFmt = a.defaultFormat
+		}
+		switch outputFmt {
+		case "json":
 			b, _ := json.MarshalIndent(result, "", "  ")
 			return fmt.Sprintf("```json\n%s\n```\n", string(b)), nil
+		case "sarif":
+			if err := a.report.Process(ctx, result, "sarif"); err != nil {
+				return "", err
+			}
+			return "", nil // SARIF written directly to stdout
+		default:
+			return FormatMarkdown(result), nil
 		}
-		return FormatMarkdown(result), nil
 
 	case "status":
 		return StatusMarkdown(a.getStatus(ctx)), nil

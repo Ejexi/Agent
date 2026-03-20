@@ -2,12 +2,12 @@ package taskengine
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/ports"
 	shared_ports "github.com/SecDuckOps/shared/ports"
+	"github.com/SecDuckOps/shared/types"
 )
 
 // Dispatcher coordinates the execution of an OSTask using a middleware pipeline.
@@ -19,19 +19,24 @@ type Dispatcher struct {
 }
 
 // NewDispatcher creates a new task dispatcher with a middleware-based pipeline.
+//
+// Pipeline order (outer → inner):
+//
+//	HookMiddleware → ReflectionMW → ThinkingMW → ObservabilityMW → TranslateMW → SecurityMW → base
 func NewDispatcher(
 	t ports.OSTranslatorPort,
 	s ports.SecurityGatePort,
 	e ports.CommandExecutorPort,
 	th ports.ThinkingPort,
 	l shared_ports.Logger,
+	hooks ports.HookRunnerPort, // nil = no hooks
 ) *Dispatcher {
 	// 1. Base handler: The final step that actually executes the OS command.
 	base := func(ctx context.Context, task *domain.OSTask) domain.OSTaskResult {
 		if e == nil {
 			return domain.OSTaskResult{
 				Status: domain.StatusFailed,
-				Error:  fmt.Errorf("no command executor configured"),
+				Error:  types.New(types.ErrCodeToolExecution, "no command executor configured"),
 			}
 		}
 		execResult, err := e.Execute(ctx, *task)
@@ -98,11 +103,18 @@ func NewDispatcher(
 		}
 	}
 
-	// Define Pipeline (Outer to Inner)
-	// Registration order: Reflection -> Thinking -> Observability -> Translation -> Security
-	// Execution order: Translation -> Security -> (Execution) -> Observability -> Thinking -> Reflection
+	// Pipeline order (outer → inner):
+	// Hook → Reflection → Thinking → Observability → Translation → Security → base
+	// Execution order: Translation → Security → base → Observability → Thinking → Reflection → Hook
 	return &Dispatcher{
-		pipeline:     ChainMiddleware(base, ReflectionMiddleware(th), ThinkingMiddleware(th), observabilityMW, translateMW, securityMW),
+		pipeline: ChainMiddleware(base,
+			ReflectionMiddleware(th),
+			ThinkingMiddleware(th),
+			observabilityMW,
+			translateMW,
+			securityMW,
+			HookMiddleware(hooks),
+		),
 		logger:       l,
 		executor:     e,
 		securityGate: s,
@@ -135,7 +147,7 @@ func (d *Dispatcher) Start(ctx context.Context, task domain.OSTask) (string, err
 	}
 	
 	if d.executor == nil {
-		return "", fmt.Errorf("no command executor configured")
+		return "", types.New(types.ErrCodeToolExecution, "no command executor configured")
 	}
 	
 	return d.executor.Start(ctx, task)
@@ -143,35 +155,35 @@ func (d *Dispatcher) Start(ctx context.Context, task domain.OSTask) (string, err
 
 func (d *Dispatcher) Kill(ctx context.Context, sessionID string) error {
 	if d.executor == nil {
-		return fmt.Errorf("no command executor configured")
+		return types.New(types.ErrCodeToolExecution, "no command executor configured")
 	}
 	return d.executor.Kill(ctx, sessionID)
 }
 
 func (d *Dispatcher) Resize(ctx context.Context, sessionID string, cols, rows int) error {
 	if d.executor == nil {
-		return fmt.Errorf("no command executor configured")
+		return types.New(types.ErrCodeToolExecution, "no command executor configured")
 	}
 	return d.executor.Resize(ctx, sessionID, cols, rows)
 }
 
 func (d *Dispatcher) Subscribe(ctx context.Context, sessionID string) (<-chan domain.ShellOutput, error) {
 	if d.executor == nil {
-		return nil, fmt.Errorf("no command executor configured")
+		return nil, types.New(types.ErrCodeToolExecution, "no command executor configured")
 	}
 	return d.executor.Subscribe(ctx, sessionID)
 }
 
 func (d *Dispatcher) GetSession(ctx context.Context, sessionID string) (domain.ShellSession, error) {
 	if d.executor == nil {
-		return domain.ShellSession{}, fmt.Errorf("no command executor configured")
+		return domain.ShellSession{}, types.New(types.ErrCodeToolExecution, "no command executor configured")
 	}
 	return d.executor.GetSession(ctx, sessionID)
 }
 
 func (d *Dispatcher) ListSessions(ctx context.Context) ([]domain.ShellSession, error) {
 	if d.executor == nil {
-		return nil, fmt.Errorf("no command executor configured")
+		return nil, types.New(types.ErrCodeToolExecution, "no command executor configured")
 	}
 	return d.executor.ListSessions(ctx)
 }

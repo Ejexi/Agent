@@ -21,7 +21,9 @@ var MenuItems = []MenuItem{
 	{Command: "/scan", Description: "Manage security scans"},
 	{Command: "/vuln", Description: "View vulnerabilities"},
 	{Command: "/clear", Description: "Clear the screen"},
-	{Command: "/logout", Description: "Sign out"},
+	{Command: "/tools", Description: "List all available tools"},
+	{Command: "/skills", Description: "List all loaded skills"},
+	{Command: "/exit", Description: "Exit the application"},
 }
 
 var (
@@ -29,7 +31,7 @@ var (
 	menuText     = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	menuMuted    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
 	menuSelected = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
-	menuWidth    = 46
+	menuWidth    = 50
 )
 
 // GetFilteredMenuItems returns menu items that start with the given filter.
@@ -87,7 +89,7 @@ func Menu(items []MenuItem, selectedIndex int) string {
 	for i, item := range items {
 		padLen := maxCmdWidth - len(item.Command) + 2
 		pad := strings.Repeat(" ", padLen)
-		
+
 		var line string
 		if i == selectedIndex {
 			// Highlighted item

@@ -12,6 +12,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/domain/security"
 	"github.com/SecDuckOps/agent/internal/kernel"
 	shared_domain "github.com/SecDuckOps/shared/llm/domain"
+	"github.com/SecDuckOps/shared/types"
 	"github.com/google/uuid"
 	"path/filepath"
 )
@@ -61,10 +62,15 @@ type ReflectionEvent struct {
 	Model      string
 }
 
+// ThoughtStreamEvent indicates a partial chunk of the agent's thought process.
+type ThoughtStreamEvent struct {
+	Chunk string
+}
+
 // StreamChat processes a user prompt and returns a channel of events (Thinking, ToolCalls, FinalResult).
 func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, error) {
 	if e.kernel == nil {
-		return nil, fmt.Errorf("kernel not initialized")
+		return nil, types.New(types.ErrCodeInternal, "kernel not initialized")
 	}
 
 	eventCh := make(chan any, 10)
@@ -78,11 +84,16 @@ func (e *Engine) StreamChat(ctx context.Context, input string) (<-chan any, erro
 		// 2. Wrap context with event callback
 		execCtx := kernel.NewExecutionContext(ctx, "session:tui", "user:tui", []security.Capability{
 			security.CapReadFS,
+			security.CapWriteFS,
 			security.CapExecuteShell,
+			security.CapModifyInfra,
+			security.CapNetOutbound,
 		}).WithEventCallback(func(evt any) {
 			// Intercept cognitive steps from the middleware pipeline.
-			// Send the typed event only — do NOT also forward the raw event,
-			// as that causes the TUI to receive duplicates.
+			if chunkEvt, ok := evt.(domain.ThoughtChunkEvent); ok {
+				eventCh <- ThoughtStreamEvent{Chunk: chunkEvt.Chunk}
+				return // consumed
+			}
 			if task, ok := evt.(domain.OSTask); ok {
 				if task.Rationale != "" {
 					eventCh <- ThoughtEvent{
@@ -263,5 +274,13 @@ func (e *Engine) GetSuggestions(ctx context.Context) []string {
 		limit = len(pool)
 	}
 	return pool[:limit]
+}
+
+// GetAvailableTools returns the schemas of all available tools from the loaded kernel.
+func (e *Engine) GetAvailableTools() []domain.ToolSchema {
+	if e.kernel == nil {
+		return nil
+	}
+	return e.kernel.GetToolSchemas(nil)
 }
 

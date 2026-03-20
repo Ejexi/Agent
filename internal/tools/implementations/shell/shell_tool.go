@@ -115,6 +115,8 @@ func (t *ShellTool) Execute(ctx context.Context, params ShellParams) (domain.Res
 	binary := mapping.Binary()
 	args := params.Args
 
+
+
 	// Windows special handling: wrap Unix commands in cmd.exe /C
 	if runtime.GOOS == "windows" && binary == "cmd" {
 		winArgs := WindowsShellArgs(params.Command, params.Args)

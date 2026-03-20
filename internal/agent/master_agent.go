@@ -9,32 +9,41 @@ import (
 
 	llm_domain "github.com/SecDuckOps/shared/llm/domain"
 	shared_ports "github.com/SecDuckOps/shared/ports"
-	"github.com/SecDuckOps/shared/scanner/domain"
+	scanner_domain "github.com/SecDuckOps/shared/scanner/domain"
 	scanner_ports "github.com/SecDuckOps/shared/scanner/ports"
+	shared_events "github.com/SecDuckOps/shared/events"
 	"github.com/SecDuckOps/shared/types"
 	"github.com/SecDuckOps/agent/internal/agent/subagents"
+	agent_domain "github.com/SecDuckOps/agent/internal/domain"
+	"github.com/SecDuckOps/agent/internal/ports"
 )
 
 const defaultScanTimeout = 30 * time.Minute
 
 // MasterAgent orchestrates parallel scan subagents via the AOrchestra pattern.
-//
-// Transport is fully abstracted behind ScannerServicePort — previously Docker,
-// now MCP. The orchestration logic (AOrchestra 3-phase) is unchanged.
 type MasterAgent struct {
 	scannerSvc   scanner_ports.ScannerServicePort
 	llm          llm_domain.LLM
 	orchestrator *Orchestrator
+	hooks        ports.HookRunnerPort
+	eventBus     ports.EventBusPort // nil = no progress events
 	logger       shared_ports.Logger
 }
 
 // NewMasterAgent creates a MasterAgent.
-// scannerSvc nil → scans fail gracefully with a clear error.
-func NewMasterAgent(scannerSvc scanner_ports.ScannerServicePort, llm llm_domain.LLM, logger shared_ports.Logger) *MasterAgent {
+func NewMasterAgent(
+	scannerSvc scanner_ports.ScannerServicePort,
+	llm llm_domain.LLM,
+	logger shared_ports.Logger,
+	hooks ports.HookRunnerPort,
+	eventBus ports.EventBusPort,
+) *MasterAgent {
 	return &MasterAgent{
 		scannerSvc:   scannerSvc,
 		llm:          llm,
 		orchestrator: NewOrchestrator(llm),
+		hooks:        hooks,
+		eventBus:     eventBus,
 		logger:       logger,
 	}
 }
@@ -57,10 +66,37 @@ func (m *MasterAgent) HandleScanRequest(ctx context.Context, req ScanRequest) (*
 	}
 	req.TargetPath = target
 
+	// ── BeforeScan hook ───────────────────────────────────────────────────────
+	if m.hooks != nil {
+		hookInput := agent_domain.HookInput{
+			Event:      agent_domain.HookBeforeScan,
+			ScanTarget: target,
+			SessionID:  req.SessionID,
+			ProjectDir: target,
+			Timestamp:  time.Now().UTC(),
+		}
+		out, hookErr := m.hooks.RunBeforeScan(ctx, hookInput)
+		if hookErr != nil {
+			reason := "BeforeScan hook blocked scan"
+			if out != nil && out.Reason != "" {
+				reason = out.Reason
+			}
+			return nil, types.Newf(types.ErrCodeInternal, "%s", reason)
+		}
+	}
+
 	// ── Phase 1: Understand the project ──────────────────────────────────────
 	signals := subagents.AnalyzeProject(target)
 	m.logf("project signals: languages=%v iac=%v docker=%v files=%d",
 		signals.Languages, signals.HasIaC, signals.HasDocker, signals.FileCount)
+
+	// Emit scan started event for TUI streaming indicator
+	if m.eventBus != nil {
+		_ = m.eventBus.Publish(ctx, string(shared_events.ScanStarted), shared_events.Event{
+			Type:   shared_events.ScanStarted,
+			Source: "master_agent",
+		})
+	}
 
 	// ── Phase 2: Plan execution (LLM produces structured DAG) ────────────────
 	plan, err := m.orchestrator.Plan(ctx, signals, req)
@@ -98,7 +134,30 @@ func (m *MasterAgent) HandleScanRequest(ctx context.Context, req ScanRequest) (*
 		m.logf("wait ended: %v — returning partial results", err)
 	}
 
-	return m.aggregateResults(tracker, target, plan), nil
+	result := m.aggregateResults(tracker, target, plan)
+
+	// Emit scan completed event
+	if m.eventBus != nil {
+		_ = m.eventBus.Publish(ctx, string(shared_events.ScanCompleted), shared_events.Event{
+			Type:   shared_events.ScanCompleted,
+			Source: "master_agent",
+		})
+	}
+
+	// ── AfterScan hook (advisory) ─────────────────────────────────────────────
+	if m.hooks != nil {
+		hookInput := agent_domain.HookInput{
+			Event:      agent_domain.HookAfterScan,
+			ScanTarget: target,
+			Findings:   len(result.AllFindings),
+			SessionID:  req.SessionID,
+			ProjectDir: target,
+			Timestamp:  time.Now().UTC(),
+		}
+		m.hooks.RunAfterScan(ctx, hookInput) //nolint:errcheck — advisory
+	}
+
+	return result, nil
 }
 
 // runSubagent executes one subagent with its 4-tuple context.
@@ -136,7 +195,7 @@ func (m *MasterAgent) runSubagent(
 	// Run all scanners in parallel via RunScanBatch
 	batchResults := m.scannerSvc.RunScanBatch(ctx, req.TargetPath, scanners)
 
-	var allFindings []domain.Finding
+	var allFindings []scanner_domain.Finding
 	for _, br := range batchResults {
 		if br.Err != nil {
 			m.logf("scanner %s failed (non-fatal): %v", br.ScannerName, br.Err)
@@ -158,7 +217,7 @@ func (m *MasterAgent) runSubagent(
 func (m *MasterAgent) aggregateResults(tracker *ScanTaskTracker, targetPath string, plan *OrchestratorPlan) *AggregatedResult {
 	result := &AggregatedResult{
 		TargetPath: targetPath,
-		ByCategory: make(map[ScanCategory][]domain.Finding),
+		ByCategory: make(map[ScanCategory][]scanner_domain.Finding),
 		Tasks:      tracker.ListAll(),
 		Plan:       plan,
 	}
@@ -171,15 +230,15 @@ func (m *MasterAgent) aggregateResults(tracker *ScanTaskTracker, targetPath stri
 		for _, f := range task.Findings {
 			result.AllFindings = append(result.AllFindings, f)
 			switch f.Severity {
-			case domain.SeverityCritical:
+			case scanner_domain.SeverityCritical:
 				result.Summary.Critical++
-			case domain.SeverityHigh:
+			case scanner_domain.SeverityHigh:
 				result.Summary.High++
-			case domain.SeverityMedium:
+			case scanner_domain.SeverityMedium:
 				result.Summary.Medium++
-			case domain.SeverityLow:
+			case scanner_domain.SeverityLow:
 				result.Summary.Low++
-			case domain.SeverityInfo:
+			case scanner_domain.SeverityInfo:
 				result.Summary.Info++
 			}
 		}
@@ -208,20 +267,20 @@ func selectByDepth(scanners []string, depth int) []string {
 }
 
 // filterBySeverity removes findings below minSeverity.
-func filterBySeverity(findings []domain.Finding, minSeverity string) []domain.Finding {
+func filterBySeverity(findings []scanner_domain.Finding, minSeverity string) []scanner_domain.Finding {
 	if minSeverity == "" {
 		return findings
 	}
-	order := map[domain.Severity]int{
-		domain.SeverityInfo: 0, domain.SeverityLow: 1,
-		domain.SeverityMedium: 2, domain.SeverityHigh: 3,
-		domain.SeverityCritical: 4,
+	order := map[scanner_domain.Severity]int{
+		scanner_domain.SeverityInfo: 0, scanner_domain.SeverityLow: 1,
+		scanner_domain.SeverityMedium: 2, scanner_domain.SeverityHigh: 3,
+		scanner_domain.SeverityCritical: 4,
 	}
-	minOrder, ok := order[domain.Severity(minSeverity)]
+	minOrder, ok := order[scanner_domain.Severity(minSeverity)]
 	if !ok {
 		return findings
 	}
-	result := make([]domain.Finding, 0, len(findings))
+	result := make([]scanner_domain.Finding, 0, len(findings))
 	for _, f := range findings {
 		if order[f.Severity] >= minOrder {
 			result = append(result, f)

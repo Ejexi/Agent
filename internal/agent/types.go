@@ -11,6 +11,7 @@ type ScanRequest struct {
 	Categories  []string // empty = all enabled. e.g. ["sast","secrets"]
 	MinSeverity string   // "" | "high" | "critical"
 	OutputFmt   string   // "text" | "json"
+	SessionID   string   // optional — propagated into hook inputs
 
 	// per-category flags (set from Categories or config defaults)
 	RunSAST    bool

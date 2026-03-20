@@ -8,6 +8,7 @@ import (
 
 	"github.com/SecDuckOps/agent/internal/config"
 	"github.com/SecDuckOps/agent/internal/gui/setup"
+	"github.com/SecDuckOps/shared/types"
 )
 
 var setupCmd = &cobra.Command{
@@ -17,13 +18,13 @@ var setupCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadTOML()
 		if err != nil {
-			return fmt.Errorf("failed to load initial config: %w", err)
+			return types.Wrapf(err, types.ErrCodeInternal, "failed to load initial config")
 		}
 
 		// Run the interactive TUI
 		results, err := setup.Run(cfg)
 		if err != nil {
-			return fmt.Errorf("setup failed: %w", err)
+			return types.Wrapf(err, types.ErrCodeInternal, "setup failed")
 		}
 
 		if results == nil {
@@ -52,7 +53,7 @@ var setupCmd = &cobra.Command{
 		cfg.Settings.CollectTelemetry = results.Telemetry
 
 		if err := cfg.SaveTOML(); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
+			return types.Wrapf(err, types.ErrCodeInternal, "failed to save config")
 		}
 
 		fmt.Printf("\n✨ Profile '%s' configured successfully!\n", results.ProfileName)

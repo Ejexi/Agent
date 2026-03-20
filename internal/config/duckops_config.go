@@ -17,6 +17,50 @@ type DuckOpsConfig struct {
 	Profiles map[string]Profile `toml:"profiles"`
 	Settings Settings           `toml:"settings"`
 	MCP      MCPConfig          `toml:"mcp"`
+	Hooks    HooksConfig        `toml:"hooks"`
+}
+
+// HooksConfig holds all user-defined hook registrations.
+// Hooks can also be discovered automatically from ~/.duckops/hooks/<EventType>/*.sh.
+//
+// Example config.toml:
+//
+//	[hooks]
+//	dir = "~/.duckops/hooks"
+//
+//	[[hooks.BeforeScan]]
+//	name    = "approve-scan"
+//	command = "~/.duckops/hooks/approve-scan.sh"
+//	timeout = 10000
+//
+//	[[hooks.AfterScan]]
+//	name    = "notify-slack"
+//	command = "~/.duckops/hooks/slack-notify.sh"
+//
+//	[[hooks.BeforeTool]]
+//	name    = "block-dangerous"
+//	matcher = "shell|terminal"
+//	command = "~/.duckops/hooks/security-gate.sh"
+type HooksConfig struct {
+	// Dir is the base directory for convention-based hook discovery.
+	// Defaults to ~/.duckops/hooks.
+	Dir string `toml:"dir,omitempty"`
+
+	BeforeTool   []HookEntry `toml:"BeforeTool,omitempty"`
+	AfterTool    []HookEntry `toml:"AfterTool,omitempty"`
+	BeforeScan   []HookEntry `toml:"BeforeScan,omitempty"`
+	AfterScan    []HookEntry `toml:"AfterScan,omitempty"`
+	SessionStart []HookEntry `toml:"SessionStart,omitempty"`
+	SessionEnd   []HookEntry `toml:"SessionEnd,omitempty"`
+}
+
+// HookEntry is a single hook registration in config.toml.
+type HookEntry struct {
+	Name      string `toml:"name"`
+	Matcher   string `toml:"matcher,omitempty"`
+	Command   string `toml:"command"`
+	TimeoutMs int    `toml:"timeout,omitempty"`
+	Enabled   *bool  `toml:"enabled,omitempty"` // pointer so absent = true
 }
 
 // MCPConfig holds global MCP server configuration.

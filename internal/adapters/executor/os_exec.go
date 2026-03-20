@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"github.com/SecDuckOps/agent/internal/domain"
 	"github.com/SecDuckOps/agent/internal/ports"
 	shared_ports "github.com/SecDuckOps/shared/ports"
+	"github.com/SecDuckOps/shared/types"
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 )
@@ -33,6 +33,8 @@ type shellSession struct {
 	cancel context.CancelFunc
 	subs   []chan domain.ShellOutput
 	mu     sync.Mutex
+	// buf holds all output chunks so late subscribers (after command exits) still get output
+	buf []domain.ShellOutput
 }
 
 // NewOSExecAdapter creates a new executor that runs tasks on the native host.
@@ -215,6 +217,8 @@ func (a *OSExecAdapter) handleOutput(session *shellSession, r io.Reader, isStder
 			}
 			
 			session.mu.Lock()
+			// Buffer every chunk so late subscribers can replay
+			session.buf = append(session.buf, output)
 			for _, ch := range session.subs {
 				select {
 				case ch <- output:
@@ -235,7 +239,7 @@ func (a *OSExecAdapter) Kill(ctx context.Context, sessionID string) error {
 	a.mu.RUnlock()
 	
 	if !ok {
-		return fmt.Errorf("session not found")
+		return types.New(types.ErrCodeNotFound, "session not found")
 	}
 	
 	session.cancel()
@@ -252,7 +256,7 @@ func (a *OSExecAdapter) Resize(ctx context.Context, sessionID string, cols, rows
 	a.mu.RUnlock()
 	
 	if !ok {
-		return fmt.Errorf("session not found")
+		return types.New(types.ErrCodeNotFound, "session not found")
 	}
 	
 	if session.pty != nil {
@@ -271,16 +275,27 @@ func (a *OSExecAdapter) Subscribe(ctx context.Context, sessionID string) (<-chan
 	a.mu.RUnlock()
 	
 	if !ok {
-		return nil, fmt.Errorf("session not found")
+		return nil, types.New(types.ErrCodeNotFound, "session not found")
 	}
 	
-	ch := make(chan domain.ShellOutput, 100)
+	ch := make(chan domain.ShellOutput, 256)
 	
 	session.mu.Lock()
 	if !session.IsActive {
+		// Command already finished — replay the buffered output and close
+		for _, out := range session.buf {
+			ch <- out
+		}
 		session.mu.Unlock()
 		close(ch)
 		return ch, nil
+	}
+	// Command still running — replay buffer so far, then stream live output
+	for _, out := range session.buf {
+		select {
+		case ch <- out:
+		default:
+		}
 	}
 	session.subs = append(session.subs, ch)
 	session.mu.Unlock()
@@ -294,7 +309,7 @@ func (a *OSExecAdapter) GetSession(ctx context.Context, sessionID string) (domai
 	
 	session, ok := a.sessions[sessionID]
 	if !ok {
-		return domain.ShellSession{}, fmt.Errorf("session not found")
+		return domain.ShellSession{}, types.New(types.ErrCodeNotFound, "session not found")
 	}
 	
 	return session.ShellSession, nil

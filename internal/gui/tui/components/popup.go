@@ -12,41 +12,89 @@ var (
 	popupTitle  = lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#555555"}
 	popupText   = lipgloss.AdaptiveColor{Light: "#1a1a2e", Dark: "#e0e0e0"}
 	popupMuted  = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"}
+	popupBg     = lipgloss.AdaptiveColor{Light: "", Dark: ""}
 )
 
-// RenderShortcutsPopup renders the keyboard shortcuts popup.
-func RenderShortcutsPopup(termW, termH int, isLegacy bool) string {
-	// ── Colors & Styles ─────────────────────────────────────────────
-	bgColor := lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1A1A1A"}
-	
-	baseStyle := lipgloss.NewStyle().Background(bgColor)
-	
-	titleStyle := baseStyle.Copy().
-		Foreground(popupTitle).
-		Bold(true)
+// ── Shared helpers ───────────────────────────────────────────────────
 
-	keyStyle := baseStyle.Copy().
-		Foreground(popupTitle).
-		Bold(true)
-
-	descStyle := baseStyle.Copy().
-		Foreground(popupText)
-
-	mutedStyle := baseStyle.Copy().
-		Foreground(popupMuted).
-		Italic(true)
-
-	sepColor := lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#333333"}
-	sepStyle := baseStyle.Copy().Foreground(sepColor)
-
-	popupW := 60
+// popupDims calculates outer and inner widths clamped to terminal width.
+func popupDims(termW, preferredW int) (popupW, innerW int) {
+	popupW = preferredW
 	if popupW > termW-4 {
 		popupW = termW - 4
 	}
+	innerW = popupW - 6
+	if innerW < 10 {
+		innerW = 10
+	}
+	return
+}
 
-	// ── Content Building ────────────────────────────────────────────
-	title := titleStyle.Render("KEYBOARD SHORTCUTS")
-	sep := sepStyle.Render(strings.Repeat("─", popupW-4))
+// line renders a string at a fixed width with given alignment,
+// manually padding with styled spaces to prevent ANSI background bleed.
+func line(s string, w int, align lipgloss.Position) string {
+	visibleW := lipgloss.Width(s)
+	if visibleW >= w {
+		return s
+	}
+
+	padTotal := w - visibleW
+	var padLeft, padRight int
+	// Convert lipgloss.Position (float64) to meaning: 0=Left, 0.5=Center, 1=Right
+	if align == lipgloss.Left {
+		padRight = padTotal
+	} else if align == lipgloss.Right {
+		padLeft = padTotal
+	} else {
+		padLeft = padTotal / 2
+		padRight = padTotal - padLeft
+	}
+
+	bgStyle := lipgloss.NewStyle().Background(popupBg)
+	res := ""
+	if padLeft > 0 {
+		res += bgStyle.Render(strings.Repeat(" ", padLeft))
+	}
+	res += s
+	if padRight > 0 {
+		res += bgStyle.Render(strings.Repeat(" ", padRight))
+	}
+	return res
+}
+
+// sep renders a horizontal separator at a fixed width.
+func sep(w int) string {
+	return lipgloss.NewStyle().
+		Width(w).
+		Background(popupBg).
+		Foreground(lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#333333"}).
+		Render(strings.Repeat("─", w))
+}
+
+// popupModal wraps content in a bordered box with background.
+func popupModal(content string, popupW int, isLegacy bool) string {
+	border := lipgloss.RoundedBorder()
+	if isLegacy {
+		border = lipgloss.NormalBorder()
+	}
+	return lipgloss.NewStyle().
+		BorderStyle(border).
+		BorderForeground(popupBorder).
+		Background(popupBg).
+		Padding(1, 2).
+		Width(popupW).
+		Render(content)
+}
+
+// ── Shortcuts popup ──────────────────────────────────────────────────
+
+func RenderShortcutsPopup(termW, termH int, isLegacy bool) string {
+	popupW, innerW := popupDims(termW, 60)
+
+	titleStyle := lipgloss.NewStyle().Background(popupBg).Foreground(popupTitle).Bold(true)
+	keyStyle := lipgloss.NewStyle().Background(popupBg).Foreground(popupTitle).Bold(true)
+	descStyle := lipgloss.NewStyle().Background(popupBg).Foreground(popupText)
+	mutedStyle := lipgloss.NewStyle().Background(popupBg).Foreground(popupMuted).Italic(true)
 
 	shortcuts := []struct{ key, desc string }{
 		{"Ctrl+C", "Quit Application"},
@@ -54,7 +102,6 @@ func RenderShortcutsPopup(termW, termH int, isLegacy bool) string {
 		{"Ctrl+B", "Toggle side panel"},
 		{"Esc", "Close current view"},
 		{"Enter", "Send message"},
-		{"Alt+Enter", "Add new line (\\n)"},
 		{"/", "Open command menu"},
 		{"!", "Terminal mode prefix"},
 		{"@", "File search prefix"},
@@ -62,43 +109,68 @@ func RenderShortcutsPopup(termW, termH int, isLegacy bool) string {
 		{"Ctrl+F", "Toggle terminal focus"},
 	}
 
-	var rows []string
-	for _, s := range shortcuts {
-		// Use fixed-width rendering for the key column via fmt.Sprintf to avoid style-width issues
-		key := fmt.Sprintf("%-16s", s.key)
-		rows = append(rows, keyStyle.Render(key)+" "+descStyle.Render(s.desc))
+	var lines []string
+	lines = append(lines,
+		line(titleStyle.Render("KEYBOARD SHORTCUTS"), innerW, lipgloss.Center),
+		sep(innerW),
+		"",
+	)
+	for _, sc := range shortcuts {
+		row := keyStyle.Render(fmt.Sprintf("%-12s", sc.key)) + lipgloss.NewStyle().Background(popupBg).Render("  ") + descStyle.Render(sc.desc)
+		lines = append(lines, line(row, innerW, lipgloss.Left))
 	}
-
-	hint := mutedStyle.Render("Press Esc or Ctrl+K to close")
-
-	content := lipgloss.JoinVertical(lipgloss.Center,
-		title,
-		sep,
+	lines = append(lines,
 		"",
-		lipgloss.JoinVertical(lipgloss.Left, rows...),
-		"",
-		sep,
-		hint,
+		sep(innerW),
+		line(mutedStyle.Render("Press Esc or Ctrl+K to close"), innerW, lipgloss.Center),
 	)
 
-	// ── Container ───────────────────────────────────────────────────
-	border := lipgloss.RoundedBorder()
-	if isLegacy {
-		border = lipgloss.NormalBorder()
+	return popupModal(strings.Join(lines, "\n"), popupW, isLegacy)
+}
+
+// ── Exit popup ───────────────────────────────────────────────────────
+
+func RenderExitPopup(termW, termH int, isLegacy bool, selectedYes bool) string {
+	const question = "Are you sure you want to exit DuckOps?"
+	popupW, innerW := popupDims(termW, lipgloss.Width(question)+8)
+
+	accentColor := lipgloss.AdaptiveColor{Light: "#E53935", Dark: "#EF5350"}
+	titleStyle := lipgloss.NewStyle().Background(popupBg).Foreground(accentColor).Bold(true)
+	textStyle := lipgloss.NewStyle().Background(popupBg).Foreground(popupText)
+	mutedStyle := lipgloss.NewStyle().Background(popupBg).Foreground(popupMuted).Italic(true)
+
+	plainBtn := lipgloss.NewStyle().Background(popupBg).Padding(0, 2)
+	activeBtn := lipgloss.NewStyle().
+		Background(lipgloss.AdaptiveColor{Light: "#FFEBEE", Dark: "#3A1A1A"}).
+		Foreground(accentColor).
+		Bold(true).
+		Padding(0, 2)
+
+	yesLabel, noLabel := "  Yes", "  No "
+	yesStyle, noStyle := plainBtn, plainBtn
+	if selectedYes {
+		yesLabel = "▸ Yes"
+		yesStyle = activeBtn
+	} else {
+		noLabel = "▸ No "
+		noStyle = activeBtn
 	}
 
-	// Height is content lines + padding
-	contentLines := strings.Split(content, "\n")
-	popupH := len(contentLines) + 2
+	buttons := lipgloss.JoinHorizontal(lipgloss.Center,
+		yesStyle.Render(yesLabel), lipgloss.NewStyle().Background(popupBg).Render("  "), noStyle.Render(noLabel),
+	)
 
-	modalStyle := lipgloss.NewStyle().
-		BorderStyle(border).
-		BorderForeground(popupBorder).
-		Background(bgColor).
-		Padding(1, 2).
-		Width(popupW).
-		Height(popupH)
+	lines := []string{
+		line(titleStyle.Render("🦆 EXIT DUCKOPS"), innerW, lipgloss.Center),
+		sep(innerW),
+		"",
+		line(textStyle.Render(question), innerW, lipgloss.Center),
+		"",
+		line(buttons, innerW, lipgloss.Center),
+		"",
+		sep(innerW),
+		line(mutedStyle.Render("(Enter to confirm, Esc to cancel)"), innerW, lipgloss.Center),
+	}
 
-	// Place the content in the center of the modal box
-	return modalStyle.Render(content)
+	return popupModal(strings.Join(lines, "\n"), popupW, isLegacy)
 }

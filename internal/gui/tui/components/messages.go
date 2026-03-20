@@ -54,6 +54,7 @@ type ChatMessage struct {
 	TableHeaders []string
 	TableData    [][]string
 	Suggestions  []string
+	Checkpoint   string
 }
 
 // ChatMessage type constants (mirror model-level enum w/o import cycle).
@@ -291,6 +292,21 @@ func renderSingleMessage(msg ChatMessage, contentWidth int) string {
 	if len(msg.Suggestions) > 0 {
 		parts = append(parts, "", renderSuggestions(msg.Suggestions, contentWidth))
 	}
+
+	// Add checkpoint separator at the bottom if present
+	if msg.Checkpoint != "" {
+		chkText := fmt.Sprintf(" checkpoint %s ", msg.Checkpoint)
+		dashCount := (contentWidth - lipgloss.Width(chkText)) / 2
+		if dashCount < 0 { dashCount = 0 }
+		
+		dashes := strings.Repeat("─", dashCount)
+		chkptLine := lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#AAAAAA", Dark: "#AAAAAA"}).
+			Render(fmt.Sprintf("%s%s%s", dashes, chkText, dashes))
+			
+		parts = append(parts, "", chkptLine)
+	}
+
 	// Trailing blank line for spacing between messages.
 	parts = append(parts, "")
 
@@ -312,10 +328,10 @@ func renderTable(headers []string, rows [][]string, width int) string {
 	}
 
 	colWidths := make([]int, numCols)
-	maxPerCol := availWidth / 3
 
-	for c := 0; c < numCols-1; c++ {
-		maxW := len(headers[c])
+	// Determine the ideal width for each column based on content
+	for c := 0; c < numCols; c++ {
+		maxW := lipgloss.Width(headers[c])
 		for _, r := range rows {
 			if c < len(r) {
 				if l := lipgloss.Width(r[c]); l > maxW {
@@ -323,22 +339,31 @@ func renderTable(headers []string, rows [][]string, width int) string {
 				}
 			}
 		}
-		if maxW > maxPerCol {
-			maxW = maxPerCol
-		}
 		colWidths[c] = maxW
 	}
 
-	// Last column gets whatever is left; guarantee a minimum of 10.
-	used := 0
-	for c := 0; c < numCols-1; c++ {
-		used += colWidths[c]
+	// Calculate total ideal width
+	totalIdeal := 0
+	for c := 0; c < numCols; c++ {
+		totalIdeal += colWidths[c]
 	}
-	last := availWidth - used
-	if last < 10 {
-		last = 10
+
+	// If it exceeds available width, iteratively shrink the largest column
+	if totalIdeal > availWidth {
+		for totalIdeal > availWidth {
+			maxIdx := 0
+			for c := 1; c < numCols; c++ {
+				if colWidths[c] > colWidths[maxIdx] {
+					maxIdx = c
+				}
+			}
+			if colWidths[maxIdx] <= 5 {
+				break
+			}
+			colWidths[maxIdx]--
+			totalIdeal--
+		}
 	}
-	colWidths[numCols-1] = last
 
 	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fc0404ff")).Bold(true).Padding(0, 1)
 	cellStyle := lipgloss.NewStyle().Padding(0, 1)

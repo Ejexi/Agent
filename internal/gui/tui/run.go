@@ -11,13 +11,13 @@ import (
 )
 
 // Run launches the interactive DuckOps TUI.
-func Run(k *kernel.Kernel, modelName string, appSessionManager ports.AppSessionManager, eventBus ports.EventBusPort, skillRegistry skills.Registry) error {
+func Run(k *kernel.Kernel, modelName string, appSessionManager ports.AppSessionManager, sessionManager ports.SessionManager, eventBus ports.EventBusPort, skillRegistry skills.Registry) error {
 	// 1. Detect terminal capabilities
 	caps := terminal.DetectTerminal()
 
 	// 2. Create the model
-	m := NewModel(caps, modelName, appSessionManager, eventBus, skillRegistry)
-	
+	m := NewModel(caps, modelName, appSessionManager, sessionManager, eventBus, skillRegistry)
+
 	// 3. Inject the kernel into the engine
 	m.engine.SetKernel(k)
 

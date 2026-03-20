@@ -518,8 +518,12 @@ func (a *SessionActor) Run() error {
 		}
 
 		// ===== Parse response =====
+		// First extract the first valid JSON block from the response
+		// This protects against LLMs outputting JSONL (multiple back-to-back objects)
+		jsonBody := tryExtractFirstJSON(response)
+
 		var parsed agentResponse
-		if err := json.Unmarshal([]byte(response), &parsed); err != nil {
+		if err := json.Unmarshal([]byte(jsonBody), &parsed); err != nil {
 			// Non-JSON = final answer
 			a.session.mu.Lock()
 			a.session.Subagent.Result = response
@@ -861,4 +865,31 @@ func (a *SessionActor) compressHistory(ctx context.Context, llm shared_domain.LL
 	newMessages = append(newMessages, tail...)
 
 	return newMessages, nil
+}
+
+// tryExtractFirstJSON attempts to find the first complete JSON block in a string.
+// Crucial for handling LLMs that output JSONL (multiple consecutive JSON objects).
+func tryExtractFirstJSON(input string) string {
+	input = strings.TrimSpace(input)
+
+	// Look for the first '{'
+	start := strings.Index(input, "{")
+	if start == -1 {
+		return input
+	}
+
+	// Use json.NewDecoder to safely decode exactly one JSON object
+	dec := json.NewDecoder(strings.NewReader(input[start:]))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err == nil {
+		return string(raw) // This returns EXACTLY the first parsed JSON object
+	}
+
+	// Fallback to old heuristic if decoder fails
+	end := strings.LastIndex(input, "}")
+	if start != -1 && end != -1 && end > start {
+		return input[start : end+1]
+	}
+
+	return input
 }
