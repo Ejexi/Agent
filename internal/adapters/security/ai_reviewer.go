@@ -228,3 +228,36 @@ Response format: Just the beautified presentation text, no conversational prefix
 	result.Content = strings.TrimSpace(result.Content)
 	return result, nil
 }
+
+// IsSafeToAutoExecute asks the LLM to classify if a terminal/shell command
+// requires explicit human approval (destructive) or is safe to just execute (read-only).
+func (a *AIReviewer) IsSafeToAutoExecute(ctx context.Context, command string, args []string) (bool, error) {
+	llm := a.llmRegistry.Get(a.provider)
+	if llm == nil {
+		llm = a.llmRegistry.Default()
+	}
+	if llm == nil {
+		return false, types.New(types.ErrCodeNotFound, "no LLM provider found")
+	}
+
+	prompt := fmt.Sprintf(`You are the DuckOps Security Classifier.
+Analyze the following OS command. Determine if it is genuinely destructive or sensitive, requiring explicit user approval.
+Safe commands are generally read-only (like 'ls', 'pwd', 'cat', 'git status', 'whoami'). Destructive commands modify state, edit infrastructure, or delete data.
+Reply with EXACTLY ONE WORD: "true" if the command is completely safe and read-only, or "false" if it is destructive or edits infrastructure.
+
+Command: %s %v`, command, args)
+
+	result, err := llm.Generate(ctx, []domain.Message{
+		{Role: domain.RoleUser, Content: prompt},
+	}, nil)
+
+	if err != nil {
+		return false, err
+	}
+
+	resp := strings.TrimSpace(strings.ToLower(result.Content))
+	if strings.HasPrefix(resp, "true") {
+		return true, nil
+	}
+	return false, nil
+}

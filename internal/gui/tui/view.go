@@ -51,7 +51,7 @@ func (m model) View() string {
 		cwd = m.engine.GetCwd()
 	}
 
-	header := components.HeaderView(m.width, "0.2.0", "admin")
+	header := components.HeaderView(m.width, "1.0.0", "admin")
 	headerH := lipgloss.Height(header)
 
 	// ── Overlay/Stack Components ────────────────────────────────────

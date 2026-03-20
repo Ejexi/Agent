@@ -182,6 +182,7 @@ type model struct {
 
 	// Stream tracking
 	lastStreamCh <-chan any
+	streamingReply bool
 }
 
 // NewModel creates an initialised model with the given terminal capabilities.

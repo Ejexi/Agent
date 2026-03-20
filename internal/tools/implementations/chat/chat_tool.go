@@ -150,10 +150,11 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 		var result domain.GenerationResult
 		var err error
 		
-		// Attempt generation with current provider, with fallback rotation and retry logic
+		// Use streaming for real-time responsiveness
 		maxRetries := 3
+		var streamChan <-chan domain.ChatChunk
 		for retry := 0; retry <= maxRetries; retry++ {
-			result, err = llm.Generate(ctx, messages, nil)
+			streamChan, err = llm.Stream(ctx, messages, nil)
 			if err == nil {
 				break
 			}
@@ -170,9 +171,33 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 					continue
 				}
 			}
-			
-			// For other errors or final retry, break and handle fallback
 			break
+		}
+		
+		var accumulatedStr strings.Builder
+
+		if err == nil {
+			// Phase 1 of response handling: stream chunks back to UI live
+			for chunk := range streamChan {
+				if chunk.Error != nil {
+					err = chunk.Error
+					// Only print error chunks if they're actual errors, EOF check should be in Stream provider logic usually
+					break // For stream we abort reading
+				}
+				
+				if chunk.Content != "" {
+					accumulatedStr.WriteString(chunk.Content)
+					
+					// Real-time streaming for the LLM text output!
+					emit(chunk.Content, subagent.EventStreamToken)
+				}
+				
+				if chunk.Done {
+					result.Usage = chunk.Usage
+					break
+				}
+			}
+			result.Content = accumulatedStr.String()
 		}
 		if err != nil {
 			// Phase 6 Enhancements: Robust Multi-Provider Rotation
@@ -195,11 +220,32 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 				
 				emit(fmt.Sprintf("Provider '%s' failed (%v). Rotating to fallback '%s'...", llm.Name(), err, pName), subagent.EventError)
 				
-				result, err = fallbackLLM.Generate(ctx, messages, nil)
+				streamChan, err = fallbackLLM.Stream(ctx, messages, nil)
 				if err == nil {
-					llm = fallbackLLM
-					success = true
-					break
+					accumulatedStr.Reset()
+					for chunk := range streamChan {
+						if chunk.Error != nil {
+							err = chunk.Error
+							break // Drop this fallback, maybe next will work
+						}
+						
+						if chunk.Content != "" {
+							accumulatedStr.WriteString(chunk.Content)
+							emit(chunk.Content, subagent.EventStreamToken)
+						}
+						
+						if chunk.Done {
+							result.Usage = chunk.Usage
+							break
+						}
+					}
+					
+					if err == nil {
+						result.Content = accumulatedStr.String()
+						llm = fallbackLLM
+						success = true
+						break
+					}
 				}
 				tried[pName] = true
 			}
@@ -246,13 +292,13 @@ Always respond with valid JSON. Do not include any text outside the JSON object.
 			emit(fmt.Sprintf("Tool Call: Executing %s...", tc.Name), subagent.EventToolCall)
 			
 			// Infer capabilities based on tool name to trigger HITL approval natively
-			reqCaps := []security.Capability{security.CapModifyInfra} // Default to action
+			reqCaps := []security.Capability{security.CapNetOutbound} // Default to safe-ish outbound network call instead of modify infra
 			lowerName := strings.ToLower(tc.Name)
-			if strings.Contains(lowerName, "read") || strings.Contains(lowerName, "search") || strings.Contains(lowerName, "find") || strings.Contains(lowerName, "list") {
+			if strings.Contains(lowerName, "read") || strings.Contains(lowerName, "search") || strings.Contains(lowerName, "find") || strings.Contains(lowerName, "list") || strings.Contains(lowerName, "get") {
 				reqCaps = []security.Capability{security.CapReadFS}
-			} else if lowerName == "shell" || lowerName == "terminal" {
+			} else if lowerName == "shell" || lowerName == "terminal" || strings.Contains(lowerName, "bash") || strings.Contains(lowerName, "exec") {
 				reqCaps = []security.Capability{security.CapExecuteShell}
-			} else if strings.Contains(lowerName, "write") {
+			} else if strings.Contains(lowerName, "write") || strings.Contains(lowerName, "edit") || strings.Contains(lowerName, "modify") || strings.Contains(lowerName, "update") {
 				reqCaps = []security.Capability{security.CapWriteFS}
 			}
 

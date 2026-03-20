@@ -34,6 +34,7 @@ const (
 	EventPaused   = events.SubagentEventPaused
 	EventResumed  = events.SubagentEventResumed
 	EventThought  = events.SubagentEventThought
+	EventStreamToken = events.SubagentEventStreamToken
 
 	// Typed lifecycle events (duckops AgentEvent parity)
 	EventTurnStarted            = events.SubagentEventTurnStarted

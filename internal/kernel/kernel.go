@@ -20,6 +20,7 @@ type Dependencies struct {
 	Warden         ports.WardenPort
 	ShellExecution ports.ShellExecutionPort
 	ShellLifecycle ports.ShellLifecyclePort
+	SafetyClassifier ports.ThinkingPort
 }
 
 // Kernel is the execution authority — it coordinates registry, runtime and dispatching.
@@ -38,7 +39,7 @@ func New(deps Dependencies) *Kernel {
 		return nil // Registry is now a required external dependency
 	}
 	
-	run := NewRuntime(deps.ToolRegistry, deps.AuditLog)
+	run := NewRuntime(deps.ToolRegistry, deps.AuditLog, deps.SafetyClassifier)
 	disp := NewDispatcher(run, deps.MessageBus, deps.Logger)
 
 	if run == nil || disp == nil {

@@ -199,6 +199,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == subagent.EventThought {
 			content = strings.TrimPrefix(content, "Thinking: ")
 		}
+		if msg.Type == subagent.EventStreamToken {
+			if !m.streamingReply || len(m.messages) == 0 || m.messages[len(m.messages)-1].Sender != "DuckOps" {
+				m.streamingReply = true
+				m.messages = append(m.messages, Message{
+					Type:       AgentMsg,
+					Content:    content,
+					Sender:     "DuckOps",
+					Timestamp:  time.Now(),
+					Checkpoint: uuid.New().String()[:8],
+				})
+			} else {
+				m.messages[len(m.messages)-1].Content += content
+			}
+			m.scroll = 0
+			m.stayAtBottom = true
+			return m, waitForAgentEvent(m.lastStreamCh)
+		}
 		if msg.Type == subagent.EventPaused {
 			var info *subagent.PauseInfo
 			if mData, ok := msg.Data.(map[string]interface{}); ok {
@@ -307,13 +324,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engine.ChatResult:
 		m.isProcessing = false
 		m.loading = false
-		m.messages = append(m.messages, Message{
-			Type:       AgentMsg,
-			Content:    msg.Content,
-			Sender:     "DuckOps",
-			Timestamp:  time.Now(),
-			Checkpoint: uuid.New().String()[:8], // Shorter UUID for cleaner UI
-		})
+		if m.streamingReply && len(m.messages) > 0 && m.messages[len(m.messages)-1].Sender == "DuckOps" {
+			// Update the final content of the streaming message
+			m.messages[len(m.messages)-1].Content = msg.Content
+			m.streamingReply = false
+		} else {
+			// Not streaming or missing agent message, append as new
+			m.messages = append(m.messages, Message{
+				Type:       AgentMsg,
+				Content:    msg.Content,
+				Sender:     "DuckOps",
+				Timestamp:  time.Now(),
+				Checkpoint: uuid.New().String()[:8], // Shorter UUID for cleaner UI
+			})
+		}
 		m.totalUsage.PromptTokens += msg.Usage.PromptTokens
 		m.totalUsage.CompletionTokens += msg.Usage.CompletionTokens
 		m.totalUsage.TotalTokens += msg.Usage.TotalTokens

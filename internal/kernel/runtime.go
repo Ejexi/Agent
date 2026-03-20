@@ -13,15 +13,17 @@ import (
 
 // Runtime handles the execution of tools.
 type Runtime struct {
-	registry ports.ToolRegistry
-	auditLog ports.AuditLogPort
+	registry   ports.ToolRegistry
+	auditLog   ports.AuditLogPort
+	classifier ports.ThinkingPort
 }
 
 // NewRuntime creates a new runtime.
-func NewRuntime(registry ports.ToolRegistry, auditLog ports.AuditLogPort) *Runtime {
+func NewRuntime(registry ports.ToolRegistry, auditLog ports.AuditLogPort, classifier ports.ThinkingPort) *Runtime {
 	return &Runtime{
-		registry: registry,
-		auditLog: auditLog,
+		registry:   registry,
+		auditLog:   auditLog,
+		classifier: classifier,
 	}
 }
 
@@ -78,10 +80,36 @@ func (r *Runtime) Execute(ctx *ExecutionContext, task domain.Task) (domain.Resul
 	needsApproval := false
 	
 	// Only ask for approval if there is an interactive UI listening for events.
-	// Trigger approval for *any* action-oriented capability (everything except reading files).
+	// Trigger approval ONLY for highly destructive or sensitive capabilities.
 	if ctx.OnEvent != nil {
 		for _, cap := range task.RequiredCaps {
-			if cap != security.CapReadFS {
+			if cap == security.CapExecuteShell || cap == security.CapModifyInfra || cap == security.CapAccessKubernetes || cap == security.CapAgentControl {
+				// Special exception: ask the Smart Agent if this specific command is safe.
+				// For example, if it's just 'ls' or 'git status', it shouldn't need user approval.
+				isSafeShell := false
+				if r.classifier != nil && (task.Tool == "shell" || task.Tool == "terminal") {
+					cmd, _ := task.Args["command"].(string)
+					
+					var args []string
+					switch v := task.Args["args"].(type) {
+					case []interface{}:
+						for _, a := range v {
+							args = append(args, fmt.Sprint(a))
+						}
+					case []string:
+						args = v
+					}
+					
+					safe, err := r.classifier.IsSafeToAutoExecute(ctx, cmd, args)
+					if err == nil && safe {
+						isSafeShell = true
+					}
+				}
+				
+				if isSafeShell {
+					continue // Bypass approval for this specific safe capability
+				}
+
 				needsApproval = true
 				break
 			}

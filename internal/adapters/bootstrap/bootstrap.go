@@ -165,13 +165,16 @@ func FromTOML(parentCtx context.Context, tomlCfg *config.DuckOpsConfig) (*App, e
 	osExecutor := executor.NewOSExecAdapter(appLogger)
 	toolRegistry := agent_app.NewToolRegistryService(appLogger)
 
+	aiReviewer := security.NewAIReviewer(llmRegistry, profile.Provider, appLogger)
+
 	deps := kernel.Dependencies{
-		ToolRegistry:   toolRegistry,
-		LLM:            llmRegistry,
-		Logger:         appLogger,
-		Warden:         wardenInstance,
-		ShellExecution: osExecutor,
-		ShellLifecycle: osExecutor,
+		ToolRegistry:     toolRegistry,
+		LLM:              llmRegistry,
+		Logger:           appLogger,
+		Warden:           wardenInstance,
+		ShellExecution:   osExecutor,
+		ShellLifecycle:   osExecutor,
+		SafetyClassifier: aiReviewer,
 	}
 	k := kernel.New(deps)
 	if k == nil {
@@ -315,7 +318,7 @@ func registerTools(
 ) (domain_skills.Registry, error) {
 
 	osTranslator := translator.NewOSTranslatorAdapter("")
-	aiReviewer := security.NewAIReviewer(deps.LLM, profile.Provider, appLogger)
+	aiReviewer := deps.SafetyClassifier
 	taskWarden := security.NewTaskWardenAdapter(deps.Warden, osTranslator, appLogger)
 	hookRunner := buildHookRunner(tomlHooks, appLogger)
 	taskDispatcher := taskengine.NewDispatcher(osTranslator, taskWarden, deps.ShellExecution, aiReviewer, appLogger, hookRunner)
